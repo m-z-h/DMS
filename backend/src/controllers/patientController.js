@@ -5,6 +5,7 @@ const Doctor = require('../models/Doctor');
 const MedicalRecord = require('../models/MedicalRecord');
 const Appointment = require('../models/Appointment');
 const AccessGrant = require('../models/AccessGrant');
+const AccessRequest = require('../models/AccessRequest');
 const { generatePDF } = require('../utils/pdfGenerator');
 
 // Get all medical records for the logged-in patient
@@ -131,10 +132,10 @@ exports.getMyAppointments = async (req, res) => {
     const appointments = await Appointment.find({
       patientId: patient._id
     })
-    .sort({ date: -1, time: -1 }) // Most recent first
+    .sort({ date: 1, time: 1 }) // Sort by date ascending
     .populate({
       path: 'doctorId',
-      select: 'fullName hospitalCode departmentCode contactNo',
+      select: 'fullName hospitalCode departmentCode',
     });
 
     res.status(200).json({
@@ -143,7 +144,7 @@ exports.getMyAppointments = async (req, res) => {
       data: appointments
     });
   } catch (error) {
-    console.error('Error getting appointments:', error);
+    console.error('Error getting patient appointments:', error);
     res.status(500).json({
       success: false,
       message: 'Server Error',
@@ -271,6 +272,10 @@ const createAccessGrantModel = () => {
         type: String,
         enum: ['read', 'readWrite'],
         default: 'read'
+      },
+      isActive: {
+        type: Boolean,
+        default: true
       }
     });
     
@@ -349,6 +354,7 @@ exports.revokeDoctorAccess = async (req, res) => {
 
     // Get patient details from user ID
     const patient = await Patient.findOne({ userId: req.user.id });
+    
     if (!patient) {
       return res.status(404).json({
         success: false,
@@ -356,19 +362,22 @@ exports.revokeDoctorAccess = async (req, res) => {
       });
     }
 
-    // Find and delete access grant
-    const AccessGrant = createAccessGrantModel();
-    const result = await AccessGrant.findOneAndDelete({
+    // Find and update the grant
+    const grant = await AccessGrant.findOne({
       patientId: patient._id,
       doctorId
     });
 
-    if (!result) {
+    if (!grant) {
       return res.status(404).json({
         success: false,
-        message: 'No access grant found for this doctor'
+        message: 'Access grant not found'
       });
     }
+
+    // Set grant to inactive
+    grant.isActive = false;
+    await grant.save();
 
     res.status(200).json({
       success: true,
@@ -389,6 +398,7 @@ exports.getMyAccessGrants = async (req, res) => {
   try {
     // Get patient details from user ID
     const patient = await Patient.findOne({ userId: req.user.id });
+    
     if (!patient) {
       return res.status(404).json({
         success: false,
@@ -396,14 +406,15 @@ exports.getMyAccessGrants = async (req, res) => {
       });
     }
 
-    // Find all access grants
-    const AccessGrant = createAccessGrantModel();
-    const grants = await AccessGrant.find({
-      patientId: patient._id
+    // Find all active access grants
+    const grants = await AccessGrant.find({ 
+      patientId: patient._id,
+      isActive: true,
+      expiresAt: { $gt: new Date() } // Not expired
     })
     .populate({
       path: 'doctorId',
-      select: 'fullName hospitalCode departmentCode'
+      select: 'fullName hospitalCode departmentCode userId',
     });
 
     res.status(200).json({
@@ -426,28 +437,24 @@ exports.getAccessRequests = async (req, res) => {
   try {
     // Get patient details from user ID
     const patient = await Patient.findOne({ userId: req.user.id });
+    
     if (!patient) {
       return res.status(404).json({
         success: false,
         message: 'Patient profile not found'
       });
     }
-    
-    // Find access requests
-    const AccessRequest = require('../models/AccessRequest');
-    const requests = await AccessRequest.find({
+
+    // Find access requests for this patient
+    const requests = await AccessRequest.find({ 
       patientId: patient._id
     })
     .sort({ requestedAt: -1 })
     .populate({
       path: 'doctorId',
-      select: 'fullName hospitalCode departmentCode contactNo',
-      populate: {
-        path: 'userId',
-        select: 'email'
-      }
+      select: 'fullName hospitalCode departmentCode',
     });
-    
+
     res.status(200).json({
       success: true,
       count: requests.length,
@@ -487,7 +494,6 @@ exports.respondToAccessRequest = async (req, res) => {
     }
     
     // Find the request
-    const AccessRequest = require('../models/AccessRequest');
     const request = await AccessRequest.findById(requestId);
     
     if (!request) {
@@ -563,30 +569,100 @@ exports.generateNewAccessCode = async (req, res) => {
   try {
     // Get patient details from user ID
     const patient = await Patient.findOne({ userId: req.user.id });
+    
     if (!patient) {
       return res.status(404).json({
         success: false,
         message: 'Patient profile not found'
       });
     }
+
+    // Generate a new 12-digit access code
+    const generateCode = () => {
+      return Math.floor(100000000000 + Math.random() * 900000000000).toString();
+    };
+
+    // Make sure the code is unique
+    let accessCode;
+    let isUnique = false;
     
-    // Generate new access code
-    const crypto = require('crypto');
-    const newAccessCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-    
-    // Update patient record
-    patient.accessCode = newAccessCode;
+    while (!isUnique) {
+      accessCode = generateCode();
+      const existingPatient = await Patient.findOne({ accessCode });
+      if (!existingPatient) {
+        isUnique = true;
+      }
+    }
+
+    // Update patient with new code
+    patient.accessCode = accessCode;
     await patient.save();
-    
+
     res.status(200).json({
       success: true,
       message: 'Access code regenerated successfully',
       data: {
-        accessCode: newAccessCode
+        accessCode: patient.accessCode
       }
     });
   } catch (error) {
     console.error('Error generating new access code:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
+// Get patient profile
+exports.getProfile = async (req, res) => {
+  try {
+    const patient = await Patient.findOne({ userId: req.user.id });
+    
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient profile not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: patient
+    });
+  } catch (error) {
+    console.error('Error getting patient profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
+// Get available doctors for scheduling appointments
+exports.getDoctors = async (req, res) => {
+  try {
+    // Get all active doctors
+    const doctors = await Doctor.find()
+      .populate({
+        path: 'userId',
+        select: 'email active',
+        match: { active: true } // Only include active user accounts
+      })
+      .select('fullName specialization hospitalCode departmentCode');
+    
+    // Filter out doctors whose user account is not active
+    const activeDoctors = doctors.filter(doc => doc.userId);
+    
+    res.status(200).json({
+      success: true,
+      count: activeDoctors.length,
+      data: activeDoctors
+    });
+  } catch (error) {
+    console.error('Error getting doctors list:', error);
     res.status(500).json({
       success: false,
       message: 'Server Error',

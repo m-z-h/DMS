@@ -530,34 +530,46 @@ exports.updateAppointmentStatus = async (req, res) => {
 
 // Access patient data from other hospitals
 exports.accessCrossHospitalData = async (req, res) => {
+  console.log('accessCrossHospitalData called with:', req.body);
+  
   try {
     const { patientId, accessCode } = req.body;
-
-    // Validate patientId is a valid MongoDB ObjectId
-    if (!mongoose.Types.ObjectId.isValid(patientId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid patient ID format'
-      });
-    }
+    console.log('Patient ID:', patientId);
+    console.log('Access Code:', accessCode);
 
     // Get doctor details
     const doctor = await Doctor.findOne({ userId: req.user.id });
     if (!doctor) {
+      console.log('Doctor profile not found');
       return res.status(404).json({
         success: false,
         message: 'Doctor profile not found'
       });
     }
+    console.log('Doctor found:', doctor._id);
 
-    // Verify patient exists
-    const patient = await Patient.findById(patientId);
+    // First try to find patient by MongoDB ObjectId
+    let patient = null;
+    
+    // Check if patientId is a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(patientId)) {
+      patient = await Patient.findById(patientId);
+    }
+    
+    // If not found by ObjectId, try to find by accessCode (12-digit ID)
+    if (!patient && patientId.length === 12) {
+      console.log('Searching for patient by 12-digit ID (accessCode)');
+      patient = await Patient.findOne({ accessCode: patientId });
+    }
+    
     if (!patient) {
+      console.log('Patient not found');
       return res.status(404).json({
         success: false,
-        message: 'Patient not found'
+        message: 'Patient not found. Please check the patient ID.'
       });
     }
+    console.log('Patient found:', patient._id);
 
     // Check access authorization - three ways to get access:
     // 1. Using access code
@@ -575,6 +587,7 @@ exports.accessCrossHospitalData = async (req, res) => {
     });
 
     if (grant) {
+      console.log('Access granted via existing grant');
       accessGranted = true;
       accessMethod = 'existing_grant';
     }
@@ -589,6 +602,7 @@ exports.accessCrossHospitalData = async (req, res) => {
       });
       
       if (existingRecord) {
+        console.log('Access granted via same hospital');
         accessGranted = true;
         accessMethod = 'same_hospital';
       }
@@ -596,11 +610,44 @@ exports.accessCrossHospitalData = async (req, res) => {
     
     // Finally, check access code if provided
     if (!accessGranted && accessCode) {
+      console.log('Checking access code');
+      console.log('Patient access code:', patient.accessCode);
+      console.log('Provided access code:', accessCode);
+      
       if (patient.accessCode === accessCode) {
+        console.log('Access granted via access code');
         accessGranted = true;
         accessMethod = 'access_code';
         
-        // Create an access request record if it doesn't exist
+        // Create an access grant that persists until revoked by the patient
+        const existingGrant = await AccessGrant.findOne({
+          patientId: patient._id,
+          doctorId: doctor._id
+        });
+        
+        if (!existingGrant) {
+          // Set expiry to 1 year from now by default
+          const expiryDate = new Date();
+          expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+          
+          await AccessGrant.create({
+            patientId: patient._id,
+            doctorId: doctor._id,
+            accessLevel: 'readWrite', // Allow edit/update access
+            expiresAt: expiryDate,
+            isActive: true
+          });
+          console.log('Created persistent access grant');
+        } else if (!existingGrant.isActive) {
+          // Reactivate existing grant if it was previously deactivated
+          existingGrant.isActive = true;
+          existingGrant.expiresAt = new Date();
+          existingGrant.expiresAt.setFullYear(existingGrant.expiresAt.getFullYear() + 1);
+          await existingGrant.save();
+          console.log('Reactivated existing access grant');
+        }
+        
+        // Also create an access request record for audit purposes
         const existingRequest = await AccessRequest.findOne({
           patientId: patient._id,
           doctorId: doctor._id,
@@ -612,13 +659,15 @@ exports.accessCrossHospitalData = async (req, res) => {
             patientId: patient._id,
             doctorId: doctor._id,
             message: `Access requested using access code on ${new Date().toISOString().split('T')[0]}`,
-            accessLevel: 'read',
+            accessLevel: 'readWrite',
             status: 'approved',
             responseMessage: 'Auto-approved via access code',
             responseDate: new Date()
           });
+          console.log('Created access request record');
         }
       } else {
+        console.log('Invalid access code');
         return res.status(403).json({
           success: false,
           message: 'Invalid access code'
@@ -628,6 +677,7 @@ exports.accessCrossHospitalData = async (req, res) => {
     
     // If no access method worked, deny access
     if (!accessGranted) {
+      console.log('No access method worked');
       return res.status(403).json({
         success: false,
         message: 'You do not have access to this patient\'s data. Request access or use a valid access code.'
@@ -639,6 +689,29 @@ exports.accessCrossHospitalData = async (req, res) => {
       patientId: patient._id
     }).sort({ createdAt: -1 });
 
+    console.log('Records found:', records.length);
+
+    // Include patient details in the response
+    const patientDetails = {
+      _id: patient._id,
+      fullName: patient.fullName,
+      dateOfBirth: patient.dateOfBirth,
+      contactNo: patient.contactNo,
+      address: patient.address,
+      accessCode: patient.accessCode
+    };
+
+    // Return response with both records and patient details
+    res.status(200).json({
+      success: true,
+      count: records.length,
+      accessMethod,
+      patientDetails,
+      data: records
+    });
+    
+    // Uncomment encryption code later once base functionality is working
+    /*
     // Filter and decrypt records
     const accessibleRecords = records.map(record => {
       const recordObj = record.toObject();
@@ -690,8 +763,10 @@ exports.accessCrossHospitalData = async (req, res) => {
       success: true,
       count: accessibleRecords.length,
       accessMethod,
+      patientDetails,
       data: accessibleRecords
     });
+    */
   } catch (error) {
     console.error('Error accessing cross-hospital data:', error);
     res.status(500).json({

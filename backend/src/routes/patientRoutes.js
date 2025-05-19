@@ -10,7 +10,9 @@ const {
   getMyAccessGrants,
   getAccessRequests,
   respondToAccessRequest,
-  generateNewAccessCode
+  generateNewAccessCode,
+  getProfile,
+  getDoctors
 } = require('../controllers/patientController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -21,6 +23,10 @@ const router = express.Router();
 router.use(protect);
 router.use(authorize('Patient'));
 
+// Profile management
+router.get('/profile', getProfile);
+router.put('/profile', updatePersonalInfo);
+
 // Medical record routes
 router.get('/records', getMyRecords);
 router.get('/records/download', downloadMedicalReport);
@@ -28,9 +34,7 @@ router.get('/records/download', downloadMedicalReport);
 // Appointment routes
 router.get('/appointments', getMyAppointments);
 router.post('/appointments/request', requestAppointment);
-
-// Profile management
-router.put('/profile', updatePersonalInfo);
+router.get('/doctors', getDoctors); // Get available doctors for appointments
 
 // Access management
 router.post('/access/grant', grantDoctorAccess);

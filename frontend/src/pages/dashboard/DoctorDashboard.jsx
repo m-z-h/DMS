@@ -12,6 +12,9 @@ const DoctorDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
+  // Add state for cross-hospital accessed patient
+  const [accessedPatient, setAccessedPatient] = useState(null);
+  
   // Form states
   const [newRecord, setNewRecord] = useState({
     diagnosis: '',
@@ -211,10 +214,13 @@ const DoctorDashboard = () => {
     e.preventDefault();
     
     try {
-      // Validate patientId format (MongoDB ObjectId should be 24 characters hexadecimal)
+      // Validate patientId format (MongoDB ObjectId should be 24 characters hexadecimal or 12 digits for AABHAA ID)
       const validObjectIdPattern = /^[0-9a-fA-F]{24}$/;
-      if (!validObjectIdPattern.test(crossHospitalAccess.patientId)) {
-        setError('Invalid patient ID format. Patient ID should be a 24-character hexadecimal string.');
+      const validAabhaaIdPattern = /^\d{12}$/;
+      
+      if (!validObjectIdPattern.test(crossHospitalAccess.patientId) && 
+          !validAabhaaIdPattern.test(crossHospitalAccess.patientId)) {
+        setError('Invalid patient ID format. Patient ID should be either a 24-character MongoDB ID or a 12-digit AABHAA ID.');
         return;
       }
       
@@ -230,6 +236,13 @@ const DoctorDashboard = () => {
       );
       
       setCrossHospitalRecords(res.data.data || []);
+      
+      // Save patient details if provided in the response
+      if (res.data.patientDetails) {
+        // Store the accessed patient for future use
+        setAccessedPatient(res.data.patientDetails);
+      }
+      
       alert('Cross-hospital data accessed successfully');
     } catch (err) {
       console.error('Error accessing data:', err);
@@ -828,7 +841,7 @@ const DoctorDashboard = () => {
                   required
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Patient ID must be a valid 24-character MongoDB ID. You can find this in the patient details section.
+                  Patient ID must be a valid 24-character MongoDB ID or a 12-digit AABHAA ID.
                 </p>
               </div>
               
@@ -855,66 +868,207 @@ const DoctorDashboard = () => {
           
           {/* Cross Hospital Records */}
           <div className="col-span-1 lg:col-span-2 bg-white p-6 rounded-lg shadow">
-            <h2 className="text-lg font-semibold mb-4">Cross-Hospital Records</h2>
-            
-            {crossHospitalRecords.length > 0 ? (
-              <div className="divide-y divide-gray-200">
-                {crossHospitalRecords.map(record => (
-                  <div key={record._id} className="py-4">
-                    <div className="flex justify-between mb-2">
-                      <div className="flex items-center">
-                        <h3 className="font-medium">{
-                          record.recordType.charAt(0).toUpperCase() + record.recordType.slice(1)
-                        } Record</h3>
-                        {record.isEncrypted && (
-                          <span className={`ml-2 px-2 py-0.5 text-xs rounded ${
-                            record.accessGranted ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                          }`}>
-                            {record.accessGranted ? 'Decrypted' : 'Encrypted'}
-                          </span>
-                        )}
+            {accessedPatient ? (
+              <>
+                {/* Patient Details */}
+                <div className="mb-6 border-b pb-4">
+                  <h2 className="text-lg font-semibold mb-2">Patient Details</h2>
+                  <p className="mb-1"><span className="font-medium">Name:</span> {accessedPatient.fullName}</p>
+                  <p className="mb-1">
+                    <span className="font-medium">Date of Birth:</span> {accessedPatient.dateOfBirth ? new Date(accessedPatient.dateOfBirth).toLocaleDateString() : 'N/A'}
+                  </p>
+                  <p className="mb-1"><span className="font-medium">Contact:</span> {accessedPatient.contactNo || 'N/A'}</p>
+                  <p className="mb-1"><span className="font-medium">Address:</span> {accessedPatient.address || 'N/A'}</p>
+                  <p className="mb-1"><span className="font-medium">Access Code:</span> {accessedPatient.accessCode}</p>
+                  <p className="mt-2 text-xs text-green-600">
+                    Your access to this patient's data will persist until revoked by the patient.
+                  </p>
+                </div>
+                
+                {/* Add Medical Record Form */}
+                <div className="mb-6 border-b pb-4">
+                  <h2 className="text-lg font-semibold mb-2">Add New Medical Record</h2>
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    const token = localStorage.getItem('token');
+                    
+                    axios.post(
+                      `${apiUrl}/doctor/records`, 
+                      {
+                        ...newRecord,
+                        patientId: accessedPatient._id
+                      },
+                      {
+                        headers: { Authorization: `Bearer ${token}` }
+                      }
+                    )
+                    .then(res => {
+                      alert('Medical record created successfully');
+                      setCrossHospitalRecords([res.data.data, ...crossHospitalRecords]);
+                      setNewRecord({
+                        diagnosis: '',
+                        prescription: '',
+                        recordType: 'general',
+                        notes: '',
+                        vital: {
+                          temperature: '',
+                          bloodPressure: '',
+                          heartRate: '',
+                          sugarLevel: ''
+                        },
+                        shouldEncrypt: false
+                      });
+                    })
+                    .catch(err => {
+                      console.error('Error creating record:', err);
+                      alert('Failed to create medical record');
+                    });
+                  }}>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Record Type</label>
+                        <select
+                          name="recordType"
+                          value={newRecord.recordType}
+                          onChange={(e) => handleInputChange(e, setNewRecord, newRecord)}
+                          className="w-full p-2 border border-gray-300 rounded"
+                        >
+                          <option value="general">General</option>
+                          <option value="lab">Lab Results</option>
+                          <option value="prescription">Prescription</option>
+                          <option value="vitals">Vitals</option>
+                          <option value="notes">Notes</option>
+                        </select>
                       </div>
-                      <span className="text-sm text-gray-500">
-                        {new Date(record.createdAt).toLocaleDateString()}
-                      </span>
+                      
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Encrypt Record</label>
+                        <div className="flex items-center mt-2">
+                          <input
+                            type="checkbox"
+                            id="shouldEncrypt"
+                            name="shouldEncrypt"
+                            checked={newRecord.shouldEncrypt}
+                            onChange={(e) => setNewRecord({...newRecord, shouldEncrypt: e.target.checked})}
+                            className="mr-2"
+                          />
+                          <label htmlFor="shouldEncrypt" className="text-sm text-gray-600">
+                            Encrypt sensitive data
+                          </label>
+                        </div>
+                      </div>
                     </div>
                     
-                    <p className="mb-1">
-                      <span className="font-medium">Hospital:</span> {record.hospitalCode}
-                    </p>
-                    <p className="mb-1">
-                      <span className="font-medium">Department:</span> {record.departmentCode}
-                    </p>
-                    <p className="mb-1">
-                      <span className="font-medium">Diagnosis:</span> {record.diagnosis}
-                      {record.isEncrypted && !record.accessGranted && (
-                        <span className="ml-2 text-xs text-red-600">
-                          (Access denied: Your attributes don't match the encryption policy)
-                        </span>
-                      )}
-                    </p>
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Diagnosis</label>
+                      <textarea
+                        name="diagnosis"
+                        value={newRecord.diagnosis}
+                        onChange={(e) => handleInputChange(e, setNewRecord, newRecord)}
+                        className="w-full p-2 border border-gray-300 rounded"
+                        rows="2"
+                        required
+                      ></textarea>
+                    </div>
                     
-                    {record.prescription && (
-                      <p className="mb-1"><span className="font-medium">Prescription:</span> {record.prescription}</p>
-                    )}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Prescription</label>
+                      <textarea
+                        name="prescription"
+                        value={newRecord.prescription}
+                        onChange={(e) => handleInputChange(e, setNewRecord, newRecord)}
+                        className="w-full p-2 border border-gray-300 rounded"
+                        rows="2"
+                      ></textarea>
+                    </div>
                     
-                    {record.recordType === 'vitals' && record.vital && (
-                      <div className="mt-2 text-sm text-gray-600">
-                        <p>Temperature: {record.vital.temperature || 'N/A'} °F</p>
-                        <p>Blood Pressure: {record.vital.bloodPressure || 'N/A'}</p>
-                        <p>Heart Rate: {record.vital.heartRate || 'N/A'} bpm</p>
-                        <p>Blood Sugar: {record.vital.sugarLevel || 'N/A'} mg/dL</p>
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Notes</label>
+                      <textarea
+                        name="notes"
+                        value={newRecord.notes}
+                        onChange={(e) => handleInputChange(e, setNewRecord, newRecord)}
+                        className="w-full p-2 border border-gray-300 rounded"
+                        rows="2"
+                      ></textarea>
+                    </div>
+                    
+                    <button
+                      type="submit"
+                      className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none"
+                    >
+                      Add Medical Record
+                    </button>
+                  </form>
+                </div>
+                
+                <h2 className="text-lg font-semibold mb-4">Cross-Hospital Records</h2>
+                
+                {crossHospitalRecords.length > 0 ? (
+                  <div className="divide-y divide-gray-200">
+                    {crossHospitalRecords.map(record => (
+                      <div key={record._id} className="py-4">
+                        <div className="flex justify-between mb-2">
+                          <div className="flex items-center">
+                            <h3 className="font-medium">{
+                              record.recordType.charAt(0).toUpperCase() + record.recordType.slice(1)
+                            } Record</h3>
+                            {record.isEncrypted && (
+                              <span className={`ml-2 px-2 py-0.5 text-xs rounded ${
+                                record.accessGranted ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {record.accessGranted ? 'Decrypted' : 'Encrypted'}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-sm text-gray-500">
+                            {new Date(record.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        
+                        <p className="mb-1">
+                          <span className="font-medium">Hospital:</span> {record.hospitalCode}
+                        </p>
+                        <p className="mb-1">
+                          <span className="font-medium">Department:</span> {record.departmentCode}
+                        </p>
+                        <p className="mb-1">
+                          <span className="font-medium">Diagnosis:</span> {record.diagnosis}
+                          {record.isEncrypted && !record.accessGranted && (
+                            <span className="ml-2 text-xs text-red-600">
+                              (Access denied: Your attributes don't match the encryption policy)
+                            </span>
+                          )}
+                        </p>
+                        
+                        {record.prescription && (
+                          <p className="mb-1"><span className="font-medium">Prescription:</span> {record.prescription}</p>
+                        )}
+                        
+                        {record.recordType === 'vitals' && record.vital && (
+                          <div className="mt-2 text-sm text-gray-600">
+                            <p>Temperature: {record.vital.temperature || 'N/A'} °F</p>
+                            <p>Blood Pressure: {record.vital.bloodPressure || 'N/A'}</p>
+                            <p>Heart Rate: {record.vital.heartRate || 'N/A'} bpm</p>
+                            <p>Blood Sugar: {record.vital.sugarLevel || 'N/A'} mg/dL</p>
+                          </div>
+                        )}
+                        
+                        {record.notes && (
+                          <p className="mt-2 text-sm italic">{record.notes}</p>
+                        )}
                       </div>
-                    )}
-                    
-                    {record.notes && (
-                      <p className="mt-2 text-sm italic">{record.notes}</p>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                ) : (
+                  <p>No cross-hospital records found for this patient.</p>
+                )}
+              </>
             ) : (
-              <p>No cross-hospital records found. Use the form to access records.</p>
+              <>
+                <h2 className="text-lg font-semibold mb-4">Cross-Hospital Records</h2>
+                <p>Access a patient using the form to view their records from all hospitals.</p>
+              </>
             )}
           </div>
         </div>

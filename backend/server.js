@@ -19,6 +19,7 @@ const fileRoutes = require('./src/routes/fileRoutes');
 const doctorRoutes = require('./src/routes/doctorRoutes');
 const patientRoutes = require('./src/routes/patientRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
+const pdfRoutes = require('./src/routes/pdfRoutes');
 
 // Middleware
 const { logActivity } = require('./src/middleware/audit');
@@ -54,6 +55,7 @@ app.use('/api/files', fileRoutes);
 app.use('/api/doctor', doctorRoutes);
 app.use('/api/patient', patientRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/pdf', pdfRoutes);
 
 // Serve uploads statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
