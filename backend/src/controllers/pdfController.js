@@ -1,4 +1,5 @@
 const Patient = require('../models/Patient');
+const User = require('../models/User');
 const { generatePDF } = require('../utils/pdfGenerator');
 
 // Generate credentials PDF for patients
@@ -22,17 +23,24 @@ exports.generateCredentialsPDF = async (req, res) => {
       });
     }
     
+    // Get user details for username and password
+    const user = await User.findById(req.user.id).select('username');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
     // Generate PDF with patient credentials
     const pdfBuffer = await generatePDF({
-      reportType: 'patientCredentials',
+      reportType: 'credentials',
       patientName: patient.fullName,
       patientId: patient._id,
-      email: req.user.email,
-      dateOfBirth: patient.dateOfBirth,
-      contactNo: patient.contactNo,
-      address: patient.address,
-      accessCode: patient.accessCode,
-      generatedDate: new Date()
+      username: user.username,
+      password: '******',
+      accessCode: patient.accessCode
     });
     
     // Set headers for PDF download

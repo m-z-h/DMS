@@ -37,12 +37,39 @@ exports.uploadFile = async (req, res) => {
 // Get all files for a specific patient
 exports.getPatientFiles = async (req, res) => {
   try {
-    // In a real application, you'd query a database to get files associated with this patient
-    // For now, we'll just return a success message
+    const uploadsDir = path.join(__dirname, '../../uploads');
+    
+    // Check if directory exists
+    if (!fs.existsSync(uploadsDir)) {
+      return res.status(200).json({
+        success: true,
+        message: 'No uploads directory found',
+        data: []
+      });
+    }
+    
+    // Read all files in the uploads directory
+    const files = fs.readdirSync(uploadsDir);
+    
+    // Get file details
+    const fileDetails = files.map(filename => {
+      const filePath = path.join(uploadsDir, filename);
+      const stats = fs.statSync(filePath);
+      
+      return {
+        filename,
+        originalname: filename.substring(filename.indexOf('-') + 1), // Remove timestamp prefix
+        path: `/uploads/${filename}`,
+        mimetype: getMimeType(filename),
+        size: stats.size,
+        createdAt: stats.birthtime
+      };
+    });
+    
     res.status(200).json({
       success: true,
       message: 'Files retrieved successfully',
-      data: [] // This would be populated from a database
+      data: fileDetails
     });
   } catch (error) {
     console.error('Error retrieving files:', error);
@@ -53,6 +80,23 @@ exports.getPatientFiles = async (req, res) => {
     });
   }
 };
+
+// Helper function to determine MIME type based on file extension
+function getMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  
+  switch (ext) {
+    case '.pdf':
+      return 'application/pdf';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    default:
+      return 'application/octet-stream';
+  }
+}
 
 // Delete a file
 exports.deleteFile = async (req, res) => {

@@ -21,11 +21,17 @@ const DoctorDashboard = () => {
     prescription: '',
     recordType: 'general',
     notes: '',
-    vital: {
+    vitalSigns: {
       temperature: '',
-      bloodPressure: '',
+      bloodPressure: {
+        systolic: '',
+        diastolic: ''
+      },
       heartRate: '',
-      sugarLevel: ''
+      respiratoryRate: '',
+      weight: '',
+      height: '',
+      oxygenSaturation: ''
     },
     shouldEncrypt: false
   });
@@ -107,10 +113,48 @@ const DoctorDashboard = () => {
     try {
       const token = localStorage.getItem('token');
       
+      // Create a deep copy to avoid modifying the state directly
+      const recordData = JSON.parse(JSON.stringify(newRecord));
+      
+      // Format vitalSigns data - remove any empty string values
+      if (recordData.vitalSigns) {
+        Object.keys(recordData.vitalSigns).forEach(key => {
+          // Handle nested bloodPressure object
+          if (key === 'bloodPressure') {
+            if (recordData.vitalSigns.bloodPressure) {
+              // Convert empty strings to null in bloodPressure
+              Object.keys(recordData.vitalSigns.bloodPressure).forEach(bpKey => {
+                if (recordData.vitalSigns.bloodPressure[bpKey] === '') {
+                  recordData.vitalSigns.bloodPressure[bpKey] = null;
+                }
+              });
+            }
+          } else if (recordData.vitalSigns[key] === '') {
+            // Convert other empty strings to null
+            recordData.vitalSigns[key] = null;
+          }
+        });
+      }
+      
+      // Convert string numbers to actual numbers
+      ['temperature', 'heartRate', 'respiratoryRate', 'weight', 'height', 'oxygenSaturation'].forEach(field => {
+        if (recordData.vitalSigns[field]) {
+          recordData.vitalSigns[field] = Number(recordData.vitalSigns[field]);
+        }
+      });
+      
+      if (recordData.vitalSigns.bloodPressure) {
+        ['systolic', 'diastolic'].forEach(field => {
+          if (recordData.vitalSigns.bloodPressure[field]) {
+            recordData.vitalSigns.bloodPressure[field] = Number(recordData.vitalSigns.bloodPressure[field]);
+          }
+        });
+      }
+      
       await axios.post(
         `${apiUrl}/doctor/records`, 
         {
-          ...newRecord,
+          ...recordData,
           patientId: selectedPatient._id
         },
         {
@@ -127,11 +171,17 @@ const DoctorDashboard = () => {
         prescription: '',
         recordType: 'general',
         notes: '',
-        vital: {
+        vitalSigns: {
           temperature: '',
-          bloodPressure: '',
+          bloodPressure: {
+            systolic: '',
+            diastolic: ''
+          },
           heartRate: '',
-          sugarLevel: ''
+          respiratoryRate: '',
+          weight: '',
+          height: '',
+          oxygenSaturation: ''
         },
         shouldEncrypt: false
       });
@@ -139,7 +189,7 @@ const DoctorDashboard = () => {
       alert('Medical record created successfully');
     } catch (err) {
       console.error('Error creating record:', err);
-      alert('Failed to create medical record');
+      alert(`Failed to create medical record: ${err.response?.data?.message || err.message}`);
     }
   };
   
@@ -254,13 +304,28 @@ const DoctorDashboard = () => {
     const { name, value } = e.target;
     
     if (nestedField) {
-      formSetter({
-        ...form,
-        [nestedField]: {
-          ...form[nestedField],
-          [name]: value
-        }
-      });
+      // Handle double nested fields like vitalSigns.bloodPressure.systolic
+      if (nestedField.includes('.')) {
+        const [parentField, childField] = nestedField.split('.');
+        formSetter({
+          ...form,
+          [parentField]: {
+            ...form[parentField],
+            [childField]: {
+              ...form[parentField][childField],
+              [name]: value
+            }
+          }
+        });
+      } else {
+        formSetter({
+          ...form,
+          [nestedField]: {
+            ...form[nestedField],
+            [name]: value
+          }
+        });
+      }
     } else {
       formSetter({
         ...form,
@@ -515,39 +580,81 @@ const DoctorDashboard = () => {
                               type="number"
                               name="temperature"
                               step="0.1"
-                              value={newRecord.vital.temperature}
-                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vital')}
+                              value={newRecord.vitalSigns.temperature}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
                               className="w-full p-2 border border-gray-300 rounded"
                             />
                           </div>
                           <div>
                             <label className="block text-sm font-medium mb-1">Blood Pressure</label>
-                            <input
-                              type="text"
-                              name="bloodPressure"
-                              placeholder="e.g. 120/80"
-                              value={newRecord.vital.bloodPressure}
-                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vital')}
-                              className="w-full p-2 border border-gray-300 rounded"
-                            />
+                            <div className="flex space-x-2">
+                              <input
+                                type="number"
+                                name="systolic"
+                                placeholder="Systolic"
+                                value={newRecord.vitalSigns.bloodPressure.systolic}
+                                onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns.bloodPressure')}
+                                className="w-1/2 p-2 border border-gray-300 rounded"
+                              />
+                              <span className="self-center">/</span>
+                              <input
+                                type="number"
+                                name="diastolic"
+                                placeholder="Diastolic"
+                                value={newRecord.vitalSigns.bloodPressure.diastolic}
+                                onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns.bloodPressure')}
+                                className="w-1/2 p-2 border border-gray-300 rounded"
+                              />
+                              <span className="self-center text-gray-500 text-xs">mmHg</span>
+                            </div>
                           </div>
                           <div>
                             <label className="block text-sm font-medium mb-1">Heart Rate (bpm)</label>
                             <input
                               type="number"
                               name="heartRate"
-                              value={newRecord.vital.heartRate}
-                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vital')}
+                              value={newRecord.vitalSigns.heartRate}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
                               className="w-full p-2 border border-gray-300 rounded"
                             />
                           </div>
                           <div>
-                            <label className="block text-sm font-medium mb-1">Blood Sugar (mg/dL)</label>
+                            <label className="block text-sm font-medium mb-1">Respiratory Rate (bpm)</label>
                             <input
                               type="number"
-                              name="sugarLevel"
-                              value={newRecord.vital.sugarLevel}
-                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vital')}
+                              name="respiratoryRate"
+                              value={newRecord.vitalSigns.respiratoryRate}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
+                              className="w-full p-2 border border-gray-300 rounded"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-1">Weight (kg)</label>
+                            <input
+                              type="number"
+                              name="weight"
+                              value={newRecord.vitalSigns.weight}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
+                              className="w-full p-2 border border-gray-300 rounded"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-1">Height (cm)</label>
+                            <input
+                              type="number"
+                              name="height"
+                              value={newRecord.vitalSigns.height}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
+                              className="w-full p-2 border border-gray-300 rounded"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-1">Oxygen Saturation (%)</label>
+                            <input
+                              type="number"
+                              name="oxygenSaturation"
+                              value={newRecord.vitalSigns.oxygenSaturation}
+                              onChange={(e) => handleInputChange(e, setNewRecord, newRecord, 'vitalSigns')}
                               className="w-full p-2 border border-gray-300 rounded"
                             />
                           </div>
@@ -625,12 +732,18 @@ const DoctorDashboard = () => {
                             <p className="mb-1"><span className="font-medium">Prescription:</span> {record.prescription}</p>
                           )}
                           
-                          {record.recordType === 'vitals' && record.vital && (
-                            <div className="mt-2 text-sm text-gray-600">
-                              <p>Temperature: {record.vital.temperature || 'N/A'} °F</p>
-                              <p>Blood Pressure: {record.vital.bloodPressure || 'N/A'}</p>
-                              <p>Heart Rate: {record.vital.heartRate || 'N/A'} bpm</p>
-                              <p>Blood Sugar: {record.vital.sugarLevel || 'N/A'} mg/dL</p>
+                          {record.recordType === 'vitals' && record.vitalSigns && (
+                            <div className="mt-2 text-sm">
+                              <p className="font-medium">Vital Signs:</p>
+                              <p>Temperature: {record.vitalSigns.temperature || 'N/A'}°C</p>
+                              {record.vitalSigns.bloodPressure && (
+                                <p>Blood Pressure: {record.vitalSigns.bloodPressure.systolic || 'N/A'}/{record.vitalSigns.bloodPressure.diastolic || 'N/A'} mmHg</p>
+                              )}
+                              <p>Heart Rate: {record.vitalSigns.heartRate || 'N/A'} bpm</p>
+                              <p>Respiratory Rate: {record.vitalSigns.respiratoryRate || 'N/A'} bpm</p>
+                              <p>Weight: {record.vitalSigns.weight || 'N/A'} kg</p>
+                              <p>Height: {record.vitalSigns.height || 'N/A'} cm</p>
+                              <p>Oxygen Saturation: {record.vitalSigns.oxygenSaturation || 'N/A'} %</p>
                             </div>
                           )}
                           
@@ -910,11 +1023,17 @@ const DoctorDashboard = () => {
                         prescription: '',
                         recordType: 'general',
                         notes: '',
-                        vital: {
+                        vitalSigns: {
                           temperature: '',
-                          bloodPressure: '',
+                          bloodPressure: {
+                            systolic: '',
+                            diastolic: ''
+                          },
                           heartRate: '',
-                          sugarLevel: ''
+                          respiratoryRate: '',
+                          weight: '',
+                          height: '',
+                          oxygenSaturation: ''
                         },
                         shouldEncrypt: false
                       });
@@ -1045,12 +1164,18 @@ const DoctorDashboard = () => {
                           <p className="mb-1"><span className="font-medium">Prescription:</span> {record.prescription}</p>
                         )}
                         
-                        {record.recordType === 'vitals' && record.vital && (
-                          <div className="mt-2 text-sm text-gray-600">
-                            <p>Temperature: {record.vital.temperature || 'N/A'} °F</p>
-                            <p>Blood Pressure: {record.vital.bloodPressure || 'N/A'}</p>
-                            <p>Heart Rate: {record.vital.heartRate || 'N/A'} bpm</p>
-                            <p>Blood Sugar: {record.vital.sugarLevel || 'N/A'} mg/dL</p>
+                        {record.recordType === 'vitals' && record.vitalSigns && (
+                          <div className="mt-2 text-sm">
+                            <p className="font-medium">Vital Signs:</p>
+                            <p>Temperature: {record.vitalSigns.temperature || 'N/A'}°C</p>
+                            {record.vitalSigns.bloodPressure && (
+                              <p>Blood Pressure: {record.vitalSigns.bloodPressure.systolic || 'N/A'}/{record.vitalSigns.bloodPressure.diastolic || 'N/A'} mmHg</p>
+                            )}
+                            <p>Heart Rate: {record.vitalSigns.heartRate || 'N/A'} bpm</p>
+                            <p>Respiratory Rate: {record.vitalSigns.respiratoryRate || 'N/A'} bpm</p>
+                            <p>Weight: {record.vitalSigns.weight || 'N/A'} kg</p>
+                            <p>Height: {record.vitalSigns.height || 'N/A'} cm</p>
+                            <p>Oxygen Saturation: {record.vitalSigns.oxygenSaturation || 'N/A'} %</p>
                           </div>
                         )}
                         

@@ -121,8 +121,12 @@ exports.createMedicalRecord = async (req, res) => {
       diagnosis, 
       prescription,
       notes,
-      vital,
+      vitalSigns,
       labResults,
+      treatmentPlan,
+      medications,
+      imaging,
+      permissions,
       shouldEncrypt = false
     } = req.body;
 
@@ -144,6 +148,45 @@ exports.createMedicalRecord = async (req, res) => {
       });
     }
 
+    // Check if doctor has access to this patient
+    const accessInfo = await checkPatientAccess(doctor._id, patientId);
+    
+    if (!accessInfo.hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to create records for this patient'
+      });
+    }
+
+    // Check if doctor has write access to create records
+    if (accessInfo.accessLevel !== 'readWrite') {
+      return res.status(403).json({
+        success: false,
+        message: 'You only have read access to this patient\'s records. You cannot create new records.'
+      });
+    }
+
+    // Process vital signs to ensure proper format
+    const processedVitalSigns = vitalSigns ? { ...vitalSigns } : {};
+    
+    // Ensure bloodPressure is properly formatted as an object
+    if (processedVitalSigns && processedVitalSigns.bloodPressure) {
+      if (typeof processedVitalSigns.bloodPressure !== 'object') {
+        // If it's not an object, create the proper structure
+        processedVitalSigns.bloodPressure = {
+          systolic: null,
+          diastolic: null
+        };
+      }
+    }
+
+    // Remove any invalid values that might cause validation errors
+    Object.keys(processedVitalSigns).forEach(key => {
+      if (processedVitalSigns[key] === '') {
+        processedVitalSigns[key] = null;
+      }
+    });
+
     // Prepare record data
     let recordData = {
       patientId,
@@ -154,8 +197,16 @@ exports.createMedicalRecord = async (req, res) => {
       diagnosis,
       prescription,
       notes,
-      vital,
-      labResults
+      vitalSigns: processedVitalSigns,
+      labResults: labResults || [],
+      treatmentPlan: treatmentPlan || {},
+      medications: medications || [],
+      imaging: imaging || [],
+      permissions: permissions || {
+        patientCanEdit: false,
+        restrictedAccess: false,
+        visibleToPatient: true
+      }
     };
 
     // Apply encryption if requested
@@ -171,8 +222,11 @@ exports.createMedicalRecord = async (req, res) => {
         diagnosis,
         prescription,
         notes,
-        vital,
-        labResults
+        vitalSigns: processedVitalSigns,
+        labResults,
+        treatmentPlan,
+        medications,
+        imaging
       };
       
       const encryptedObject = ABEEncryption.encrypt(sensitiveData, attributes);
@@ -187,12 +241,16 @@ exports.createMedicalRecord = async (req, res) => {
         diagnosis: shouldEncrypt ? '[Encrypted]' : diagnosis,
         prescription: shouldEncrypt ? '[Encrypted]' : prescription,
         notes: shouldEncrypt ? '[Encrypted]' : notes,
-        vital: shouldEncrypt ? {} : vital,
+        vitalSigns: shouldEncrypt ? {} : processedVitalSigns,
         labResults: shouldEncrypt ? [] : labResults,
+        treatmentPlan: shouldEncrypt ? {} : treatmentPlan,
+        medications: shouldEncrypt ? [] : medications,
+        imaging: shouldEncrypt ? [] : imaging,
         isEncrypted: true,
-        encryptedData: encryptedObject.encryptedData,
-        encryptedKey: encryptedObject.encryptedKey,
-        policy: encryptedObject.policy
+        encryptionDetails: {
+          policyId: encryptedObject.policy,
+          encryptionAlgorithm: 'ABE'
+        }
       };
     }
 
@@ -213,11 +271,50 @@ exports.createMedicalRecord = async (req, res) => {
   }
 };
 
+// Helper function to check if doctor has access to patient
+const checkPatientAccess = async (doctorId, patientId) => {
+  try {
+    // Check for direct access grant
+    const grant = await AccessGrant.findOne({
+      doctorId,
+      patientId,
+      isActive: true,
+      expiresAt: { $gt: new Date() }
+    });
+    
+    if (grant) {
+      return { 
+        hasAccess: true,
+        accessLevel: grant.accessLevel 
+      };
+    }
+    
+    // Check if doctor has previously created records for this patient
+    const existingRecord = await MedicalRecord.findOne({
+      doctorId,
+      patientId
+    });
+    
+    // If doctor has created records before but no active grant, give read-only access
+    if (existingRecord) {
+      return { 
+        hasAccess: true,
+        accessLevel: 'read'  // Default to read-only for past relationships with no active grant
+      };
+    }
+    
+    return { hasAccess: false };
+  } catch (error) {
+    console.error('Error checking patient access:', error);
+    return { hasAccess: false };
+  }
+};
+
 // Update a medical record
 exports.updateMedicalRecord = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
 
     // Get doctor details
     const doctor = await Doctor.findOne({ userId: req.user.id });
@@ -246,6 +343,47 @@ exports.updateMedicalRecord = async (req, res) => {
         message: 'Not authorized to update this record'
       });
     }
+    
+    // Check if doctor has write access to this patient's records
+    // This is needed for when a patient has revoked write access but still allows read
+    const accessInfo = await checkPatientAccess(doctor._id, record.patientId);
+    if (!accessInfo.hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'You no longer have access to this patient\'s records'
+      });
+    }
+
+    if (accessInfo.accessLevel !== 'readWrite') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your access has been limited to read-only. You cannot modify records anymore.'
+      });
+    }
+    
+    // Process vital signs to ensure proper format if they're being updated
+    if (updateData.vitalSigns) {
+      const processedVitalSigns = { ...updateData.vitalSigns };
+      
+      // Ensure bloodPressure is properly formatted
+      if (processedVitalSigns.bloodPressure) {
+        if (typeof processedVitalSigns.bloodPressure !== 'object') {
+          processedVitalSigns.bloodPressure = {
+            systolic: null,
+            diastolic: null
+          };
+        }
+      }
+      
+      // Remove any invalid values that might cause validation errors
+      Object.keys(processedVitalSigns).forEach(key => {
+        if (processedVitalSigns[key] === '') {
+          processedVitalSigns[key] = null;
+        }
+      });
+      
+      updateData.vitalSigns = processedVitalSigns;
+    }
 
     // Handle encryption if needed
     if (updateData.shouldEncrypt && !record.isEncrypted) {
@@ -259,8 +397,11 @@ exports.updateMedicalRecord = async (req, res) => {
         diagnosis: updateData.diagnosis || record.diagnosis,
         prescription: updateData.prescription || record.prescription,
         notes: updateData.notes || record.notes,
-        vital: updateData.vital || record.vital,
-        labResults: updateData.labResults || record.labResults
+        vitalSigns: updateData.vitalSigns || record.vitalSigns,
+        labResults: updateData.labResults || record.labResults,
+        treatmentPlan: updateData.treatmentPlan || record.treatmentPlan,
+        medications: updateData.medications || record.medications,
+        imaging: updateData.imaging || record.imaging
       };
       
       const encryptedObject = ABEEncryption.encrypt(sensitiveData, attributes);
@@ -273,8 +414,11 @@ exports.updateMedicalRecord = async (req, res) => {
       updateData.diagnosis = '[Encrypted]';
       updateData.prescription = '[Encrypted]';
       updateData.notes = '[Encrypted]';
-      updateData.vital = {};
+      updateData.vitalSigns = {};
       updateData.labResults = [];
+      updateData.treatmentPlan = {};
+      updateData.medications = [];
+      updateData.imaging = [];
     } 
     // If removing encryption
     else if (updateData.shouldEncrypt === false && record.isEncrypted) {
@@ -292,8 +436,11 @@ exports.updateMedicalRecord = async (req, res) => {
           updateData.diagnosis = updateData.diagnosis || decryptedData.diagnosis;
           updateData.prescription = updateData.prescription || decryptedData.prescription;
           updateData.notes = updateData.notes || decryptedData.notes;
-          updateData.vital = updateData.vital || decryptedData.vital;
+          updateData.vitalSigns = updateData.vitalSigns || decryptedData.vitalSigns;
           updateData.labResults = updateData.labResults || decryptedData.labResults;
+          updateData.treatmentPlan = updateData.treatmentPlan || decryptedData.treatmentPlan;
+          updateData.medications = updateData.medications || decryptedData.medications;
+          updateData.imaging = updateData.imaging || decryptedData.imaging;
           // Remove encryption fields
           updateData.$unset = { 
             encryptedData: 1, 

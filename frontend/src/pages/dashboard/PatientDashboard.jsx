@@ -13,14 +13,19 @@ const PatientDashboard = () => {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [activeRecordTabs, setActiveRecordTabs] = useState({});
+  const [recordFilter, setRecordFilter] = useState('');
   const { user } = useAuth();
   
   // Form states
   const [personalInfo, setPersonalInfo] = useState({
     fullName: '',
     contactNo: '',
-    address: ''
+    address: '',
+    profilePhoto: null
   });
+  
+  const [profilePhotoFile, setProfilePhotoFile] = useState(null);
   
   const [appointmentForm, setAppointmentForm] = useState({
     doctorId: '',
@@ -29,12 +34,31 @@ const PatientDashboard = () => {
     reason: ''
   });
   
+  // Add a new state for uploaded files
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  
   // API base URL from environment variable or default
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
   
   useEffect(() => {
     fetchAllData();
   }, [apiUrl]);
+  
+  // Add this function to fetch uploaded files
+  const fetchUploadedFiles = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${apiUrl}/files/patient`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (response.data.success) {
+        setUploadedFiles(response.data.data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching uploaded files:', err);
+    }
+  };
   
   const fetchAllData = async () => {
     try {
@@ -77,9 +101,17 @@ const PatientDashboard = () => {
         return { data: { data: [] } };
       });
       
+      // Add files promise
+      const filesPromise = axios.get(`${apiUrl}/files/patient`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(err => {
+        console.error('Error fetching files:', err);
+        return { data: { data: [] } };
+      });
+      
       // Execute all promises in parallel
-      const [profileRes, recordsRes, appointmentsRes, grantsRes, requestsRes] = 
-        await Promise.all([profilePromise, recordsPromise, appointmentsPromise, grantsPromise, requestsPromise]);
+      const [profileRes, recordsRes, appointmentsRes, grantsRes, requestsRes, filesRes] = 
+        await Promise.all([profilePromise, recordsPromise, appointmentsPromise, grantsPromise, requestsPromise, filesPromise]);
       
       // Update state with fetched data
       setPatientInfo(profileRes.data.data);
@@ -93,7 +125,8 @@ const PatientDashboard = () => {
         setPersonalInfo({
           fullName: profileRes.data.data.fullName || '',
           contactNo: profileRes.data.data.contactNo || '',
-          address: profileRes.data.data.address || ''
+          address: profileRes.data.data.address || '',
+          profilePhoto: profileRes.data.data.profilePhoto || null
         });
       }
       
@@ -102,11 +135,28 @@ const PatientDashboard = () => {
         const doctorsRes = await axios.get(`${apiUrl}/patient/doctors`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        setDoctors(doctorsRes.data.data || []);
+        
+        // Get doctors with active access - doctors we can book appointments with
+        const accessibleDoctorIds = new Set(
+          grantsRes.data.data
+            .filter(grant => grant.accessLevel === 'readWrite')
+            .map(grant => grant.doctorId._id)
+        );
+        
+        // Filter doctors to only include those with readWrite access
+        const filteredDoctors = doctorsRes.data.data.filter(doctor => {
+          // If the doctor has an active access grant with readWrite level, allow booking
+          return accessibleDoctorIds.has(doctor._id);
+        });
+        
+        setDoctors(filteredDoctors || []);
       } catch (err) {
         console.error('Error fetching doctors:', err);
         setDoctors([]);
       }
+      
+      // Update files state
+      setUploadedFiles(filesRes.data.data || []);
       
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -121,11 +171,32 @@ const PatientDashboard = () => {
     
     try {
       const token = localStorage.getItem('token');
+      
+      // If there's a new profile photo, upload it first
+      if (profilePhotoFile) {
+        const formData = new FormData();
+        formData.append('file', profilePhotoFile);
+        
+        const uploadRes = await axios.post(`${apiUrl}/files/upload`, formData, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        
+        if (uploadRes.data.success) {
+          // Update the profile with the new photo URL
+          personalInfo.profilePhoto = `/uploads/${uploadRes.data.file.filename}`;
+        }
+      }
+      
+      // Update the profile
       await axios.put(`${apiUrl}/patient/profile`, personalInfo, {
         headers: { Authorization: `Bearer ${token}` },
       });
       
       alert('Profile updated successfully');
+      setProfilePhotoFile(null);
       fetchAllData(); // Refresh data
     } catch (err) {
       console.error('Error updating profile:', err);
@@ -152,7 +223,7 @@ const PatientDashboard = () => {
       
       alert('File uploaded successfully');
       setFile(null);
-      fetchAllData(); // Refresh data
+      fetchUploadedFiles(); // Just fetch files instead of all data
     } catch (err) {
       console.error('File upload error:', err);
       alert('File upload failed');
@@ -184,30 +255,72 @@ const PatientDashboard = () => {
   
   const handleDownloadPDF = async (type = 'credentials') => {
     try {
+      setError(null); // Clear any previous errors
       const token = localStorage.getItem('token');
       const endpoint = type === 'medicalReport' 
         ? `${apiUrl}/patient/records/download` 
         : `${apiUrl}/pdf/credentials`;
+      
+      // Show loading indicator
+      const loadingMessage = type === 'medicalReport' 
+        ? 'Generating medical report...' 
+        : 'Downloading credentials...';
+      alert(loadingMessage);
         
-      const res = await axios.get(endpoint, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob',
-      });
-      
-      const filename = type === 'medicalReport' 
-        ? 'medical_report.pdf' 
-        : 'credentials.pdf';
-      
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', filename);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      // For medical records, open in a new tab instead of downloading directly
+      if (type === 'medicalReport') {
+        try {
+          // First fetch the PDF
+          const res = await axios.get(endpoint, {
+            headers: { 
+              Authorization: `Bearer ${token}`,
+            },
+            responseType: 'blob'
+          });
+          
+          // Then open it in a new tab
+          const blob = new Blob([res.data], { type: 'application/pdf' });
+          const url = window.URL.createObjectURL(blob);
+          
+          // Open the PDF in a new tab
+          const newWindow = window.open(url, '_blank');
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            // If popup blocked, provide direct download instead
+            alert('Popup blocked. The PDF will be downloaded directly.');
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `medical_report_${new Date().toISOString().split('T')[0]}.pdf`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
+        } catch (err) {
+          console.error('Error opening medical report:', err);
+          throw new Error('Could not open the medical report. Please try again.');
+        }
+      } else {
+        // For credentials PDF, download as usual
+        const res = await axios.get(endpoint, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'blob',
+        });
+        
+        if (res.data.size < 100) { // Check if response is too small to be a valid PDF
+          throw new Error('The server returned an invalid PDF file');
+        }
+        
+        const filename = `credentials_${new Date().toISOString().split('T')[0]}.pdf`;
+        const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
     } catch (err) {
       console.error('PDF download error:', err);
-      alert('Failed to download PDF');
+      setError(`Failed to download PDF: ${err.message || 'Unknown error'}`);
     }
   };
   
@@ -230,8 +343,12 @@ const PatientDashboard = () => {
     }
   };
   
-  const handleRevokeAccess = async (doctorId) => {
-    if (!confirm("Are you sure you want to revoke this doctor's access?")) {
+  const handleRevokeAccess = async (doctorId, currentAccessLevel) => {
+    const message = currentAccessLevel === 'readWrite' 
+      ? "Are you sure you want to restrict this doctor's access to read-only? They will only be able to view existing records but not create or modify them." 
+      : "Are you sure you want to completely revoke this doctor's access? They will no longer be able to access any of your records.";
+    
+    if (!confirm(message)) {
       return;
     }
     
@@ -241,11 +358,12 @@ const PatientDashboard = () => {
         headers: { Authorization: `Bearer ${token}` },
       });
       
-      alert('Access revoked successfully');
+      const actionType = currentAccessLevel === 'readWrite' ? 'restricted to read-only' : 'revoked';
+      alert(`Access ${actionType} successfully`);
       fetchAllData(); // Refresh data
     } catch (err) {
       console.error('Error revoking access:', err);
-      setError('Failed to revoke access');
+      setError('Failed to change access permissions');
     }
   };
   
@@ -274,6 +392,45 @@ const PatientDashboard = () => {
       ...prev,
       [name]: value
     }));
+  };
+  
+  // Handle record tab selection
+  const handleRecordTab = (recordId, tabName) => {
+    setActiveRecordTabs(prev => ({
+      ...prev,
+      [recordId]: tabName
+    }));
+  };
+  
+  // Add this function to handle record filtering
+  const handleRecordFilterChange = (e) => {
+    setRecordFilter(e.target.value);
+  };
+  
+  // Function to get filtered records
+  const getFilteredRecords = () => {
+    if (!recordFilter) return records;
+    
+    return records.filter(record => 
+      record.recordType === recordFilter
+    );
+  };
+  
+  // Add this function to handle profile photo upload
+  const handleProfilePhotoChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setProfilePhotoFile(e.target.files[0]);
+      
+      // Create a preview URL for the image
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setPersonalInfo(prev => ({
+          ...prev,
+          profilePhoto: event.target.result
+        }));
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    }
   };
   
   if (loading && !patientInfo) {
@@ -453,52 +610,635 @@ const PatientDashboard = () => {
       {activeTab === 'records' && (
         <div className="space-y-6">
           <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Medical Records</h2>
-              <button
-                onClick={() => handleDownloadPDF('medicalReport')}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none"
-              >
-                Download PDF Report
-              </button>
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-xl font-semibold">Medical Records</h2>
+                <p className="text-sm text-gray-500 mt-1">Your complete medical history</p>
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => handleDownloadPDF('medicalReport')}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 focus:outline-none flex items-center"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12" />
+                  </svg>
+                  Download PDF Report
+                </button>
+              </div>
             </div>
             
-            {records.length === 0 ? (
-              <p className="text-gray-600">No records found.</p>
+            {/* Filter Controls */}
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-medium">Filter by:</span>
+                <select 
+                  className="p-2 border border-gray-300 rounded-md text-sm"
+                  value={recordFilter}
+                  onChange={handleRecordFilterChange}
+                >
+                  <option value="">All Types</option>
+                  <option value="general">General</option>
+                  <option value="lab">Lab Results</option>
+                  <option value="imaging">Imaging</option>
+                  <option value="prescription">Prescriptions</option>
+                  <option value="vitals">Vital Signs</option>
+                  <option value="treatment">Treatment</option>
+                  <option value="medication">Medication</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center space-x-1">
+                  <span className="inline-block h-3 w-3 rounded-full bg-purple-400"></span>
+                  <span className="text-xs text-gray-600">Encrypted</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="inline-block h-3 w-3 rounded-full bg-green-400"></span>
+                  <span className="text-xs text-gray-600">Recent</span>
+                </div>
+              </div>
+            </div>
+            
+            {getFilteredRecords().length === 0 ? (
+              <div className="p-8 text-center border border-gray-200 rounded-lg bg-gray-50">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="text-gray-600 mb-2">No medical records found.</p>
+                <p className="text-sm text-gray-500">Your records will appear here once a doctor creates them.</p>
+              </div>
             ) : (
-              <ul className="divide-y divide-gray-200">
-                {records.map((record) => (
-                  <li key={record._id} className="py-4">
-                    <div className="flex flex-col md:flex-row md:justify-between">
-                      <div className="mb-2 md:mb-0">
-                        <p className="text-lg font-medium">{record.diagnosis}</p>
-                        {record.prescription && (
-                          <p className="text-gray-600">
-                            <span className="font-medium">Prescription:</span> {record.prescription}
-                          </p>
-                        )}
-                        {record.notes && (
-                          <p className="text-gray-600">
-                            <span className="font-medium">Notes:</span> {record.notes}
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        <p><span className="font-medium">Hospital:</span> {record.hospitalCode}</p>
-                        <p><span className="font-medium">Department:</span> {record.departmentCode}</p>
-                        <p><span className="font-medium">Doctor:</span> Dr. {record.doctorId?.fullName || 'Unknown'}</p>
-                        <p><span className="font-medium">Date:</span> {new Date(record.createdAt).toLocaleDateString()}</p>
+              <div className="space-y-6">
+                {getFilteredRecords().map((record) => (
+                  <div key={record._id} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
+                    {/* Record Header */}
+                    <div className={`p-4 border-b border-gray-200 ${
+                      record.isEncrypted ? 'bg-purple-50' : 
+                      new Date(record.createdAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) ? 'bg-green-50' : 'bg-gray-50'
+                    }`}>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h3 className="text-lg font-medium flex items-center">
+                            {record.diagnosis}
+                            {record.permissions?.restrictedAccess && 
+                              <span className="ml-2 text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded-full">
+                                Restricted
+                              </span>
+                            }
+                            {record.isEncrypted && 
+                              <span className="ml-2 text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                                Encrypted
+                              </span>
+                            }
+                            {new Date(record.createdAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) &&
+                              <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                                New
+                              </span>
+                            }
+                          </h3>
+                          <div className="flex items-center mt-1 text-sm space-x-2">
+                            <span className="text-gray-500">
+                              Record Type: <span className="font-medium">{record.recordType.charAt(0).toUpperCase() + record.recordType.slice(1)}</span>
+                            </span>
+                            <span className="text-gray-400">•</span>
+                            <span className="text-gray-500">
+                              {new Date(record.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-sm text-right flex flex-col items-end">
+                          <div className="flex items-center mb-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                            <p className="font-medium">Dr. {record.doctorId?.fullName || 'Unknown'}</p>
+                          </div>
+                          <div className="flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z" />
+                            </svg>
+                            <p className="text-xs text-gray-500">{record.hospitalCode} | {record.departmentCode}</p>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </li>
+
+                    {/* Tabs for different record sections */}
+                    <div>
+                      <div className="flex border-b border-gray-200 bg-white overflow-x-auto">
+                        <button 
+                          className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                            (!activeRecordTabs[record._id] || activeRecordTabs[record._id] === 'overview') 
+                              ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                              : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                          }`}
+                          onClick={() => handleRecordTab(record._id, 'overview')}
+                        >
+                          <div className="flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Overview
+                          </div>
+                        </button>
+                        
+                        {(record.vitalSigns && Object.values(record.vitalSigns).some(val => val)) || 
+                         (record.vital && Object.values(record.vital).some(val => val)) && (
+                          <button 
+                            className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                              activeRecordTabs[record._id] === 'vitals' 
+                                ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleRecordTab(record._id, 'vitals')}
+                          >
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              Vital Signs
+                            </div>
+                          </button>
+                        )}
+                        
+                        {record.treatmentPlan && (
+                          record.treatmentPlan.carePlan || 
+                          record.treatmentPlan.procedures?.length > 0 || 
+                          record.treatmentPlan.icdCodes?.length > 0
+                        ) && (
+                          <button 
+                            className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                              activeRecordTabs[record._id] === 'treatment' 
+                                ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleRecordTab(record._id, 'treatment')}
+                          >
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              Treatment Plan
+                            </div>
+                          </button>
+                        )}
+                        
+                        {record.labResults?.length > 0 && (
+                          <button 
+                            className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                              activeRecordTabs[record._id] === 'labs' 
+                                ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleRecordTab(record._id, 'labs')}
+                          >
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              Lab Results
+                            </div>
+                          </button>
+                        )}
+                        
+                        {record.medications?.length > 0 && (
+                          <button 
+                            className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                              activeRecordTabs[record._id] === 'medications' 
+                                ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleRecordTab(record._id, 'medications')}
+                          >
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              Medications
+                            </div>
+                          </button>
+                        )}
+                        
+                        {record.imaging?.length > 0 && (
+                          <button 
+                            className={`px-6 py-3 text-sm font-medium transition-colors duration-200 ${
+                              activeRecordTabs[record._id] === 'imaging' 
+                                ? 'border-b-2 border-blue-500 text-blue-600 bg-blue-50' 
+                                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleRecordTab(record._id, 'imaging')}
+                          >
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              Imaging
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                      
+                      {/* Overview Content */}
+                      {(!activeRecordTabs[record._id] || activeRecordTabs[record._id] === 'overview') && (
+                        <div className="p-4 bg-white">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="bg-gray-50 p-3 rounded-lg">
+                              <h4 className="font-medium text-gray-700 mb-2">Diagnosis</h4>
+                              <p className="text-gray-800">{record.diagnosis}</p>
+                            </div>
+                            
+                            {record.prescription && (
+                              <div className="bg-gray-50 p-3 rounded-lg">
+                                <h4 className="font-medium text-gray-700 mb-2">Prescription</h4>
+                                <p className="text-gray-800 whitespace-pre-line">{record.prescription}</p>
+                              </div>
+                            )}
+                            
+                            {record.notes && (
+                              <div className="bg-gray-50 p-3 rounded-lg md:col-span-2">
+                                <h4 className="font-medium text-gray-700 mb-2">Additional Notes</h4>
+                                <p className="text-gray-800 whitespace-pre-line">{record.notes}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Vital Signs Content */}
+                      {activeRecordTabs[record._id] === 'vitals' && (record.vitalSigns || record.vital) && (
+                        <div className="p-4 bg-white">
+                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                            {(record.vitalSigns?.temperature || record.vital?.temperature) && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Temperature</p>
+                                <p className="text-xl font-medium">{record.vitalSigns?.temperature || record.vital?.temperature}°C</p>
+                              </div>
+                            )}
+                            
+                            {(record.vitalSigns?.bloodPressure || record.vital?.bloodPressure) && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Blood Pressure</p>
+                                <p className="text-xl font-medium">
+                                  {record.vitalSigns?.bloodPressure ? 
+                                    `${record.vitalSigns.bloodPressure.systolic || '-'}/${record.vitalSigns.bloodPressure.diastolic || '-'}` : 
+                                    record.vital?.bloodPressure}
+                                  <span className="text-sm text-gray-500"> mmHg</span>
+                                </p>
+                              </div>
+                            )}
+                            
+                            {(record.vitalSigns?.heartRate || record.vital?.heartRate) && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Heart Rate</p>
+                                <p className="text-xl font-medium">{record.vitalSigns?.heartRate || record.vital?.heartRate} <span className="text-sm text-gray-500">bpm</span></p>
+                              </div>
+                            )}
+                            
+                            {record.vitalSigns?.respiratoryRate && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Respiratory Rate</p>
+                                <p className="text-xl font-medium">{record.vitalSigns.respiratoryRate} <span className="text-sm text-gray-500">breaths/min</span></p>
+                              </div>
+                            )}
+                            
+                            {record.vital?.sugarLevel && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Blood Sugar</p>
+                                <p className="text-xl font-medium">{record.vital.sugarLevel} <span className="text-sm text-gray-500">mg/dL</span></p>
+                              </div>
+                            )}
+                            
+                            {record.vitalSigns?.weight && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Weight</p>
+                                <p className="text-xl font-medium">{record.vitalSigns.weight} <span className="text-sm text-gray-500">kg</span></p>
+                              </div>
+                            )}
+                            
+                            {record.vitalSigns?.height && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Height</p>
+                                <p className="text-xl font-medium">{record.vitalSigns.height} <span className="text-sm text-gray-500">cm</span></p>
+                              </div>
+                            )}
+                            
+                            {record.vitalSigns?.bmi && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">BMI</p>
+                                <p className="text-xl font-medium">{record.vitalSigns.bmi}</p>
+                              </div>
+                            )}
+                            
+                            {record.vitalSigns?.oxygenSaturation && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Oxygen Saturation</p>
+                                <p className="text-xl font-medium">{record.vitalSigns.oxygenSaturation}<span className="text-sm text-gray-500">%</span></p>
+                              </div>
+                            )}
+                          </div>
+                          
+                          {record.vitalSigns?.recordedAt && (
+                            <p className="mt-4 text-xs text-gray-500 text-right">
+                              Recorded on: {new Date(record.vitalSigns.recordedAt).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Treatment Plan Content */}
+                      {activeRecordTabs[record._id] === 'treatment' && record.treatmentPlan && (
+                        <div className="p-4 bg-white">
+                          {record.treatmentPlan.carePlan && (
+                            <div className="p-3 bg-gray-50 rounded-lg mb-4">
+                              <h4 className="font-medium text-gray-700 mb-2">Care Plan</h4>
+                              <p className="whitespace-pre-line">{record.treatmentPlan.carePlan}</p>
+                            </div>
+                          )}
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {record.treatmentPlan.icdCodes?.length > 0 && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <h4 className="font-medium text-gray-700 mb-2">Diagnosis Codes (ICD)</h4>
+                                <ul className="space-y-1">
+                                  {record.treatmentPlan.icdCodes.map((code, idx) => (
+                                    <li key={idx} className="flex justify-between">
+                                      <span className="font-mono bg-gray-200 px-2 py-0.5 rounded">{code.code}</span>
+                                      <span className="text-gray-700">{code.description}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            
+                            {record.treatmentPlan.procedures?.length > 0 && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <h4 className="font-medium text-gray-700 mb-2">Procedures</h4>
+                                <ul className="space-y-2">
+                                  {record.treatmentPlan.procedures.map((proc, idx) => (
+                                    <li key={idx} className="border-l-2 border-blue-400 pl-2">
+                                      <p className="font-medium">{proc.name}</p>
+                                      <p className="text-xs text-gray-500">
+                                        Scheduled: {new Date(proc.date).toLocaleDateString()}
+                                      </p>
+                                      {proc.notes && (
+                                        <p className="text-sm mt-1 italic text-gray-600">{proc.notes}</p>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            
+                            {record.treatmentPlan.referrals?.length > 0 && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <h4 className="font-medium text-gray-700 mb-2">Referrals</h4>
+                                <ul className="space-y-2">
+                                  {record.treatmentPlan.referrals.map((ref, idx) => (
+                                    <li key={idx} className="border-l-2 border-green-400 pl-2">
+                                      <p className="font-medium">{ref.specialist}</p>
+                                      <p className="text-sm">{ref.reason}</p>
+                                      <p className="text-xs text-gray-500">
+                                        {new Date(ref.date).toLocaleDateString()}
+                                      </p>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            
+                            {record.treatmentPlan.therapyPlans && (
+                              <div className="p-3 bg-gray-50 rounded-lg">
+                                <h4 className="font-medium text-gray-700 mb-2">Therapy Plans</h4>
+                                <p className="whitespace-pre-line">{record.treatmentPlan.therapyPlans}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Lab Results Content */}
+                      {activeRecordTabs[record._id] === 'labs' && record.labResults?.length > 0 && (
+                        <div className="p-4 bg-white">
+                          <div className="overflow-x-auto rounded-lg border border-gray-200">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Test</th>
+                                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Normal Range</th>
+                                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="bg-white divide-y divide-gray-200">
+                                {record.labResults.map((lab, idx) => (
+                                  <tr key={idx} className={lab.status === 'reviewed' ? '' : 'bg-yellow-50'}>
+                                    <td className="px-4 py-3 whitespace-nowrap font-medium">{lab.testName}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">{lab.testValue}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{lab.normalRange || 'N/A'}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">{new Date(lab.date).toLocaleDateString()}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                        lab.status === 'reviewed' 
+                                          ? 'bg-green-100 text-green-800' 
+                                          : lab.status === 'pending'
+                                            ? 'bg-yellow-100 text-yellow-800'
+                                            : 'bg-blue-100 text-blue-800'
+                                      }`}>
+                                        {lab.status === 'reviewed' ? 'Reviewed' : lab.status === 'pending' ? 'Pending' : 'Completed'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          
+                          {record.labResults.some(lab => lab.comments) && (
+                            <div className="mt-4">
+                              <h4 className="font-medium text-gray-700 mb-2">Lab Notes</h4>
+                              {record.labResults.filter(lab => lab.comments).map((lab, idx) => (
+                                <div key={idx} className="p-3 bg-gray-50 rounded-lg mb-2">
+                                  <p className="text-sm font-medium">{lab.testName}</p>
+                                  <p className="text-sm">{lab.comments}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {record.labResults.some(lab => lab.reportUrl) && (
+                            <div className="mt-4">
+                              <h4 className="font-medium text-gray-700 mb-2">Lab Reports</h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {record.labResults.filter(lab => lab.reportUrl).map((lab, idx) => (
+                                  <a 
+                                    key={idx} 
+                                    href={lab.reportUrl} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="flex items-center p-2 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                    {lab.testName} Report
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Medications Content */}
+                      {activeRecordTabs[record._id] === 'medications' && record.medications?.length > 0 && (
+                        <div className="p-4 bg-white">
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            {record.medications.map((med, idx) => (
+                              <div key={idx} className={`p-4 rounded-lg border ${med.isActive ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                                <div className="flex justify-between items-start">
+                                  <h4 className="font-medium text-lg">{med.name}</h4>
+                                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                    med.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {med.isActive ? 'Active' : 'Discontinued'}
+                                  </span>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-2 mt-3">
+                                  <div>
+                                    <p className="text-xs text-gray-500">Dosage</p>
+                                    <p className="font-medium">{med.dosage}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-500">Frequency</p>
+                                    <p className="font-medium">{med.frequency}</p>
+                                  </div>
+                                  
+                                  {med.administrationMethod && (
+                                    <div>
+                                      <p className="text-xs text-gray-500">Administration</p>
+                                      <p className="font-medium">{med.administrationMethod}</p>
+                                    </div>
+                                  )}
+                                  
+                                  {med.startDate && (
+                                    <div>
+                                      <p className="text-xs text-gray-500">Start Date</p>
+                                      <p className="font-medium">{new Date(med.startDate).toLocaleDateString()}</p>
+                                    </div>
+                                  )}
+                                  
+                                  {med.endDate && (
+                                    <div>
+                                      <p className="text-xs text-gray-500">End Date</p>
+                                      <p className="font-medium">{new Date(med.endDate).toLocaleDateString()}</p>
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {med.notes && (
+                                  <div className="mt-3 pt-2 border-t">
+                                    <p className="text-xs text-gray-500 mb-1">Notes</p>
+                                    <p className="text-sm">{med.notes}</p>
+                                  </div>
+                                )}
+                                
+                                {med.adverseReactions?.length > 0 && (
+                                  <div className="mt-3 pt-2 border-t">
+                                    <p className="text-xs text-gray-500 mb-1">Adverse Reactions</p>
+                                    <ul className="space-y-1">
+                                      {med.adverseReactions.map((reaction, i) => (
+                                        <li key={i} className="flex items-center text-sm p-1 border-l-2 border-red-300 pl-2">
+                                          <span>{reaction.reaction}</span>
+                                          <span className={`ml-2 px-1.5 py-0.5 text-xs rounded ${
+                                            reaction.severity === 'severe' 
+                                              ? 'bg-red-100 text-red-800' 
+                                              : reaction.severity === 'moderate'
+                                                ? 'bg-orange-100 text-orange-800'
+                                                : 'bg-yellow-100 text-yellow-800'
+                                          }`}>
+                                            {reaction.severity}
+                                          </span>
+                                          <span className="ml-2 text-xs text-gray-500">
+                                            {new Date(reaction.reportedOn).toLocaleDateString()}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Imaging Content */}
+                      {activeRecordTabs[record._id] === 'imaging' && record.imaging?.length > 0 && (
+                        <div className="p-4 bg-white">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {record.imaging.map((img, idx) => (
+                              <div key={idx} className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                                <div className="flex justify-between items-center mb-3">
+                                  <h4 className="font-medium">
+                                    {img.type === 'xray' ? 'X-Ray' : 
+                                     img.type === 'mri' ? 'MRI' : 
+                                     img.type === 'ct' ? 'CT Scan' : 
+                                     img.type === 'ultrasound' ? 'Ultrasound' : 
+                                     'Other'} 
+                                  </h4>
+                                  <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                    {img.bodyPart}
+                                  </span>
+                                </div>
+                                
+                                <p className="text-xs text-gray-500 mb-1">Date</p>
+                                <p className="mb-3">{new Date(img.date).toLocaleDateString()}</p>
+                                
+                                {img.findings && (
+                                  <div className="mb-3">
+                                    <p className="text-xs text-gray-500 mb-1">Findings</p>
+                                    <p className="text-sm bg-white p-2 rounded border border-gray-200">{img.findings}</p>
+                                  </div>
+                                )}
+                                
+                                {img.imageUrl && (
+                                  <div className="mb-2">
+                                    <a 
+                                      href={img.imageUrl} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer" 
+                                      className="inline-flex items-center px-3 py-2 border border-blue-300 text-sm leading-4 font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 focus:outline-none"
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                      </svg>
+                                      View Image
+                                    </a>
+                                  </div>
+                                )}
+                                
+                                {img.performedBy && (
+                                  <p className="text-xs text-gray-500 mt-2">
+                                    Performed by: {img.performedBy}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
           
           {/* File Upload */}
           <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Upload Medical Report</h2>
+            <h2 className="text-xl font-semibold mb-4">Upload Medical Document</h2>
             <form onSubmit={handleFileUpload}>
               <div className="mb-4">
                 <label 
@@ -514,18 +1254,62 @@ const PatientDashboard = () => {
                   onChange={(e) => setFile(e.target.files[0])}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <p className="mt-1 text-xs text-gray-500">Upload your medical documents to keep all your records in one place.</p>
               </div>
               
               <button
                 type="submit"
                 disabled={!file}
-                className={`bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none ${
+                className={`bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none flex items-center ${
                   !file ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               >
-                Upload
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12" />
+                </svg>
+                Upload Document
               </button>
             </form>
+            
+            {/* Display Uploaded Files */}
+            {uploadedFiles.length > 0 && (
+              <div className="mt-6">
+                <h3 className="font-medium text-gray-700 mb-3">Uploaded Documents</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {uploadedFiles.map((file, index) => (
+                    <div key={index} className="border rounded-lg overflow-hidden">
+                      {file.mimetype?.includes('image') ? (
+                        <div className="h-32 bg-gray-100">
+                          <img 
+                            src={`${apiUrl}${file.path.replace(/\\/g, '/').replace('uploads', '/uploads')}`} 
+                            alt={file.originalname} 
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-32 bg-gray-100 flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </div>
+                      )}
+                      <div className="p-2">
+                        <p className="text-sm font-medium truncate">{file.originalname}</p>
+                        <p className="text-xs text-gray-500">{new Date(file.createdAt).toLocaleDateString()}</p>
+                        <a 
+                          href={`${apiUrl}${file.path.replace(/\\/g, '/').replace('uploads', '/uploads')}`} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-600 hover:underline mt-1 inline-block"
+                        >
+                          View Document
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -553,6 +1337,11 @@ const PatientDashboard = () => {
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  {doctors.length === 0 
+                    ? "No doctors available. You must grant write access to doctors before booking appointments." 
+                    : "Only doctors with full access to your records can be booked for appointments."}
+                </p>
               </div>
               
               <div className="mb-4">
@@ -654,6 +1443,34 @@ const PatientDashboard = () => {
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-xl font-semibold mb-4">Update Personal Information</h2>
             <form onSubmit={handleUpdateProfile}>
+              {/* Profile Photo Upload */}
+              <div className="mb-6 flex flex-col items-center">
+                <div className="w-32 h-32 rounded-full overflow-hidden border-2 border-gray-300 mb-3">
+                  {personalInfo.profilePhoto ? (
+                    <img 
+                      src={personalInfo.profilePhoto.startsWith('data') ? personalInfo.profilePhoto : `${apiUrl}${personalInfo.profilePhoto}`} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <label className="cursor-pointer bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleProfilePhotoChange}
+                  />
+                  Change Photo
+                </label>
+              </div>
+              
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Full Name</label>
                 <input
@@ -702,7 +1519,27 @@ const PatientDashboard = () => {
           {/* Current Info and PDF Downloads */}
           <div className="space-y-6">
             <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-xl font-semibold mb-4">Current Information</h2>
+              <div className="flex flex-col md:flex-row items-start md:items-center mb-6">
+                <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-gray-300 mr-6 mb-4 md:mb-0 flex-shrink-0">
+                  {patientInfo?.profilePhoto ? (
+                    <img 
+                      src={`${apiUrl}${patientInfo.profilePhoto}`} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold">Current Information</h2>
+                  <p className="text-sm text-gray-500 mt-1">Your personal and account details</p>
+                </div>
+              </div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -722,6 +1559,14 @@ const PatientDashboard = () => {
                   <p className="font-medium">
                     {patientInfo?.dateOfBirth ? new Date(patientInfo.dateOfBirth).toLocaleDateString() : 'N/A'}
                   </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Patient ID</p>
+                  <p className="font-medium font-mono">{patientInfo?._id || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Access Code</p>
+                  <p className="font-medium font-mono bg-gray-100 px-2 py-1 rounded">{patientInfo?.accessCode || 'N/A'}</p>
                 </div>
               </div>
               
@@ -859,7 +1704,10 @@ const PatientDashboard = () => {
                           <span className="text-gray-600">Hospital:</span> {grant.doctorId?.hospitalCode || 'Unknown'}
                         </p>
                         <p className="text-xs text-gray-500">
-                          Access level: {grant.accessLevel === 'readWrite' ? 'Read & Write' : 'Read Only'}
+                          Access level: {grant.accessLevel === 'readWrite' ? 
+                            'Full Access (read & write)' : 
+                            'Read Only (limited access)'
+                          }
                         </p>
                         <p className="text-xs text-gray-500">
                           Expires: {new Date(grant.expiresAt).toLocaleDateString()}
@@ -867,10 +1715,10 @@ const PatientDashboard = () => {
                       </div>
                       
                       <button
-                        onClick={() => handleRevokeAccess(grant.doctorId)}
+                        onClick={() => handleRevokeAccess(grant.doctorId._id, grant.accessLevel)}
                         className="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 focus:outline-none h-fit"
                       >
-                        Revoke Access
+                        {grant.accessLevel === 'readWrite' ? 'Restrict Access' : 'Revoke Access'}
                       </button>
                     </div>
                   </li>

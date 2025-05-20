@@ -64,10 +64,33 @@ exports.downloadMedicalReport = async (req, res) => {
       patientId: patient._id
     })
     .sort({ createdAt: -1 })
-    .limit(5)
+    .limit(10)
     .populate({
       path: 'doctorId',
       select: 'fullName hospitalCode departmentCode',
+    });
+
+    // Ensure records have properly formatted vital signs for PDF generation
+    const processedRecords = recentRecords.map(record => {
+      const recordObj = record.toObject();
+      
+      // If the record has no vitalSigns or it's empty, try to use legacy vital field
+      if (!recordObj.vitalSigns || Object.keys(recordObj.vitalSigns).length === 0) {
+        return recordObj;
+      }
+      
+      // Make sure nested objects like bloodPressure are properly handled
+      if (recordObj.vitalSigns.bloodPressure) {
+        // Ensure bloodPressure has systolic and diastolic properties
+        if (typeof recordObj.vitalSigns.bloodPressure !== 'object') {
+          recordObj.vitalSigns.bloodPressure = {
+            systolic: null,
+            diastolic: null
+          };
+        }
+      }
+      
+      return recordObj;
     });
 
     // Find upcoming appointments
@@ -77,7 +100,7 @@ exports.downloadMedicalReport = async (req, res) => {
       status: { $in: ['Scheduled', 'Confirmed'] }
     })
     .sort({ date: 1, time: 1 })
-    .limit(3)
+    .limit(5)
     .populate({
       path: 'doctorId',
       select: 'fullName hospitalCode departmentCode',
@@ -91,20 +114,20 @@ exports.downloadMedicalReport = async (req, res) => {
       dateOfBirth: patient.dateOfBirth,
       contactNo: patient.contactNo,
       address: patient.address,
-      records: recentRecords,
+      records: processedRecords,
       appointments: appointments,
       accessCode: patient.accessCode,
       generatedDate: new Date()
     });
     
     // Return PDF data
-    res.status(200).json({
-      success: true,
-      data: {
-        pdfData: pdfBuffer.toString('base64'),
-        filename: `${patient.fullName.replace(/\s+/g, '_')}_medical_report.pdf`
-      }
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${patient.fullName.replace(/\s+/g, '_')}_medical_report.pdf"`
     });
+    
+    // Send PDF directly to browser for download
+    res.send(pdfBuffer);
   } catch (error) {
     console.error('Error generating medical report:', error);
     res.status(500).json({
@@ -205,7 +228,7 @@ exports.requestAppointment = async (req, res) => {
 // Update patient personal information
 exports.updatePersonalInfo = async (req, res) => {
   try {
-    const { fullName, dateOfBirth, contactNo, address } = req.body;
+    const { fullName, dateOfBirth, contactNo, address, profilePhoto } = req.body;
 
     // Get patient details from user ID
     const patient = await Patient.findOne({ userId: req.user.id });
@@ -221,6 +244,7 @@ exports.updatePersonalInfo = async (req, res) => {
     if (dateOfBirth) patient.dateOfBirth = dateOfBirth;
     if (contactNo) patient.contactNo = contactNo;
     if (address) patient.address = address;
+    if (profilePhoto !== undefined) patient.profilePhoto = profilePhoto;
 
     await patient.save();
 
@@ -375,13 +399,14 @@ exports.revokeDoctorAccess = async (req, res) => {
       });
     }
 
-    // Set grant to inactive
-    grant.isActive = false;
+    // Instead of revoking completely, just downgrade to read-only access
+    // This allows doctors to still see records they've previously created/accessed
+    grant.accessLevel = 'read'; // Downgrade to read-only
     await grant.save();
 
     res.status(200).json({
       success: true,
-      message: 'Access revoked successfully'
+      message: 'Access restricted to read-only successfully'
     });
   } catch (error) {
     console.error('Error revoking access:', error);
@@ -406,7 +431,7 @@ exports.getMyAccessGrants = async (req, res) => {
       });
     }
 
-    // Find all active access grants
+    // Find all active access grants including read-only ones (instead of just active=true)
     const grants = await AccessGrant.find({ 
       patientId: patient._id,
       isActive: true,

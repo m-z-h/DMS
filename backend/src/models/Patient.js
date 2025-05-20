@@ -26,6 +26,10 @@ const patientSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true
+  },
+  profilePhoto: {
+    type: String,
+    default: null
   }
 });
 
