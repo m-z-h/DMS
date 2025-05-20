@@ -3,6 +3,38 @@ import { useAuth } from '../../context/AuthContext';
 import axios from 'axios';
 
 const PatientDashboard = () => {
+  // Debug function for image loading issues
+  const debugImageUrl = (url, source) => {
+    console.log(`[DEBUG] Image URL (${source}):`, url);
+    return url;
+  };
+  
+  // Utility to construct proper image URLs
+  const getImageUrl = (filename) => {
+    if (!filename) return null;
+    
+    // If it's a data URL, keep as is
+    if (filename.startsWith('data:')) return filename;
+    
+    // If it's already a full URL, keep as is
+    if (filename.startsWith('http')) return filename;
+    
+    // Get API base URL from environment or default
+    const baseUrl = import.meta.env.VITE_API_URL 
+      ? import.meta.env.VITE_API_URL.replace('/api', '') // Remove /api if present
+      : window.location.origin; // Use origin as fallback
+    
+    console.log('[DEBUG] Base URL for images:', baseUrl);
+    
+    // If it includes the full path like /uploads/filename, add domain
+    if (filename.startsWith('/uploads/')) {
+      return `${baseUrl}${filename}`;
+    }
+    
+    // Otherwise assume it's just a filename that needs the full path
+    return `${baseUrl}/uploads/${filename}`;
+  };
+  
   const [activeTab, setActiveTab] = useState('overview');
   const [records, setRecords] = useState([]);
   const [appointments, setAppointments] = useState([]);
@@ -44,19 +76,33 @@ const PatientDashboard = () => {
     fetchAllData();
   }, [apiUrl]);
   
-  // Add this function to fetch uploaded files
+  // Add debugging for access grants
+  useEffect(() => {
+    console.log("Access grants updated:", accessGrants);
+  }, [accessGrants]);
+  
+  // Add this function to safely fetch uploaded files
   const fetchUploadedFiles = async () => {
     try {
+      console.log('Fetching uploaded files...');
       const token = localStorage.getItem('token');
-      const response = await axios.get(`${apiUrl}/files/patient`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      
+      if (!token) {
+        setError('Authentication token is missing');
+        return;
+      }
+      
+            const response = await axios.get(`${apiUrl}/files/patient`, {        headers: { Authorization: `Bearer ${token}` }      });
       
       if (response.data.success) {
-        setUploadedFiles(response.data.data || []);
+        console.log('Fetched files:', response.data.data);
+        setUploadedFiles(response.data.data);
+      } else {
+        setError('Failed to fetch files');
       }
     } catch (err) {
-      console.error('Error fetching uploaded files:', err);
+      console.error('Error fetching files:', err);
+      setError('Error retrieving files: ' + (err.response?.data?.message || err.message));
     }
   };
   
@@ -65,9 +111,19 @@ const PatientDashboard = () => {
       setLoading(true);
       const token = localStorage.getItem('token');
       
-      // Create promises for all API calls
+      if (!token || !navigator.onLine) {
+        setLoading(false);
+        if (!navigator.onLine) setError('You are offline. Please check your internet connection.');
+        return;
+      }
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      // Create promises for all API calls with signal for timeout
       const profilePromise = axios.get(`${apiUrl}/patient/profile`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching profile:', err);
         return { data: { data: null } };
@@ -75,6 +131,7 @@ const PatientDashboard = () => {
       
       const recordsPromise = axios.get(`${apiUrl}/patient/records`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching records:', err);
         return { data: { data: [] } };
@@ -82,6 +139,7 @@ const PatientDashboard = () => {
       
       const appointmentsPromise = axios.get(`${apiUrl}/patient/appointments`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching appointments:', err);
         return { data: { data: [] } };
@@ -89,6 +147,7 @@ const PatientDashboard = () => {
       
       const grantsPromise = axios.get(`${apiUrl}/patient/access/grants`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching access grants:', err);
         return { data: { data: [] } };
@@ -96,6 +155,7 @@ const PatientDashboard = () => {
       
       const requestsPromise = axios.get(`${apiUrl}/patient/access/requests`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching access requests:', err);
         return { data: { data: [] } };
@@ -104,60 +164,72 @@ const PatientDashboard = () => {
       // Add files promise
       const filesPromise = axios.get(`${apiUrl}/files/patient`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       }).catch(err => {
         console.error('Error fetching files:', err);
         return { data: { data: [] } };
       });
       
-      // Execute all promises in parallel
-      const [profileRes, recordsRes, appointmentsRes, grantsRes, requestsRes, filesRes] = 
-        await Promise.all([profilePromise, recordsPromise, appointmentsPromise, grantsPromise, requestsPromise, filesPromise]);
-      
-      // Update state with fetched data
-      setPatientInfo(profileRes.data.data);
-      setRecords(recordsRes.data.data || []);
-      setAppointments(appointmentsRes.data.data || []);
-      setAccessGrants(grantsRes.data.data || []);
-      setAccessRequests(requestsRes.data.data || []);
-      
-      // Populate personal info form
-      if (profileRes.data.data) {
-        setPersonalInfo({
-          fullName: profileRes.data.data.fullName || '',
-          contactNo: profileRes.data.data.contactNo || '',
-          address: profileRes.data.data.address || '',
-          profilePhoto: profileRes.data.data.profilePhoto || null
-        });
-      }
-      
-      // Also fetch available doctors for appointment booking
       try {
-        const doctorsRes = await axios.get(`${apiUrl}/patient/doctors`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // Execute all promises in parallel
+        const [profileRes, recordsRes, appointmentsRes, grantsRes, requestsRes, filesRes] = 
+          await Promise.all([profilePromise, recordsPromise, appointmentsPromise, grantsPromise, requestsPromise, filesPromise]);
         
-        // Get doctors with active access - doctors we can book appointments with
-        const accessibleDoctorIds = new Set(
-          grantsRes.data.data
-            .filter(grant => grant.accessLevel === 'readWrite')
-            .map(grant => grant.doctorId._id)
-        );
+        clearTimeout(timeoutId);
         
-        // Filter doctors to only include those with readWrite access
-        const filteredDoctors = doctorsRes.data.data.filter(doctor => {
-          // If the doctor has an active access grant with readWrite level, allow booking
-          return accessibleDoctorIds.has(doctor._id);
-        });
+        // Update state with fetched data
+        setPatientInfo(profileRes.data.data);
+        setRecords(recordsRes.data.data || []);
+        setAppointments(appointmentsRes.data.data || []);
+        setAccessGrants(grantsRes.data.data || []);
+        setAccessRequests(requestsRes.data.data || []);
         
-        setDoctors(filteredDoctors || []);
+        // Populate personal info form
+        if (profileRes.data.data) {
+          setPersonalInfo({
+            fullName: profileRes.data.data.fullName || '',
+            contactNo: profileRes.data.data.contactNo || '',
+            address: profileRes.data.data.address || '',
+            profilePhoto: profileRes.data.data.profilePhoto || null
+          });
+        }
+        
+        // Update files state
+        setUploadedFiles(filesRes.data.data || []);
+        
+        // Also fetch available doctors for appointment booking
+        try {
+          const doctorsRes = await axios.get(`${apiUrl}/patient/doctors`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          
+          // Get doctors with active access - doctors we can book appointments with
+          const accessibleDoctorIds = new Set(
+            grantsRes.data.data
+              .filter(grant => grant.accessLevel === 'readWrite' || grant.accessLevel === 'read')
+              .map(grant => grant.doctorId._id)
+          );
+          
+          // Make all doctors available for appointment booking
+          // The backend will handle access control appropriately
+          setDoctors(doctorsRes.data.data || []);
+          
+          console.log('Available doctors:', doctorsRes.data.data.length);
+          console.log('Doctors with access:', accessibleDoctorIds.size);
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.error('Error fetching doctors:', err);
+          }
+          setDoctors([]);
+        }
       } catch (err) {
-        console.error('Error fetching doctors:', err);
-        setDoctors([]);
+        if (err.name === 'AbortError') {
+          setError('Request timed out. Please try again.');
+        } else {
+          console.error('Error in Promise.all:', err);
+          setError('Failed to load data. Please check your connection and try again.');
+        }
       }
-      
-      // Update files state
-      setUploadedFiles(filesRes.data.data || []);
-      
     } catch (err) {
       console.error('Error fetching data:', err);
       setError('Failed to load data');
@@ -171,62 +243,140 @@ const PatientDashboard = () => {
     
     try {
       const token = localStorage.getItem('token');
+      let profilePhotoUrl = personalInfo.profilePhoto;
+      
+      if (!token || !navigator.onLine) {
+        alert('You seem to be offline. Please check your connection and try again.');
+        return;
+      }
+      
+      // Show uploading indicator
+      setError(null);
+      setLoading(true);
       
       // If there's a new profile photo, upload it first
       if (profilePhotoFile) {
-        const formData = new FormData();
-        formData.append('file', profilePhotoFile);
-        
-        const uploadRes = await axios.post(`${apiUrl}/files/upload`, formData, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-        
-        if (uploadRes.data.success) {
-          // Update the profile with the new photo URL
-          personalInfo.profilePhoto = `/uploads/${uploadRes.data.file.filename}`;
+        try {
+          const formData = new FormData();
+          formData.append('file', profilePhotoFile);
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+          
+          const uploadRes = await axios.post(`${apiUrl}/files/upload`, formData, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'multipart/form-data',
+            },
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (uploadRes.data.success) {
+            // Just store the filename, not the full path
+            const filename = uploadRes.data.file.filename;
+            profilePhotoUrl = filename;
+          } else {
+            throw new Error('File upload failed');
+          }
+        } catch (uploadErr) {
+          if (uploadErr.name === 'AbortError') {
+            setLoading(false);
+            alert('Image upload timed out. Please try a smaller image.');
+            return;
+          } else {
+            console.error('Profile photo upload error:', uploadErr);
+            alert('Failed to upload profile photo. Profile information will be updated without the new photo.');
+          }
         }
       }
       
+      // Create updated profile data with possibly new photo URL
+      const updatedProfile = {
+        ...personalInfo,
+        profilePhoto: profilePhotoUrl
+      };
+      
       // Update the profile
-      await axios.put(`${apiUrl}/patient/profile`, personalInfo, {
+      const updateRes = await axios.put(`${apiUrl}/patient/profile`, updatedProfile, {
         headers: { Authorization: `Bearer ${token}` },
       });
       
-      alert('Profile updated successfully');
+      // Update local state with new profile data
+      if (updateRes.data.success) {
+        // Update the local states
+        setPersonalInfo(prev => ({
+          ...prev,
+          profilePhoto: profilePhotoUrl
+        }));
+        
+        // Also update patientInfo to display in Current Information section
+        setPatientInfo(prev => ({
+          ...prev,
+          fullName: updatedProfile.fullName,
+          contactNo: updatedProfile.contactNo,
+          address: updatedProfile.address,
+          profilePhoto: profilePhotoUrl
+        }));
+        
+        alert('Profile updated successfully');
+      } else {
+        alert('Failed to update profile');
+      }
+      
       setProfilePhotoFile(null);
-      fetchAllData(); // Refresh data
     } catch (err) {
       console.error('Error updating profile:', err);
-      setError('Failed to update profile');
+      setError('Failed to update profile: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setLoading(false);
     }
   };
   
+  // Update handleFileUpload to be more robust
   const handleFileUpload = async (e) => {
     e.preventDefault();
     
     if (!file) return;
     
     try {
+      console.log('Starting file upload for:', file.name, 'Size:', Math.round(file.size/1024), 'KB');
+      
       const formData = new FormData();
       formData.append('file', file);
       
       const token = localStorage.getItem('token');
-      await axios.post(`${apiUrl}/files/upload`, formData, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for uploads
+      
+      console.log('Sending upload request...');
+      const response = await axios.post(`${apiUrl}/files/upload`, formData, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'multipart/form-data',
         },
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
+      console.log('Upload response:', response.data);
       
       alert('File uploaded successfully');
       setFile(null);
-      fetchUploadedFiles(); // Just fetch files instead of all data
+      
+      // Only fetch files again if the upload was successful
+      if (response.data.success) {
+        // Add short delay before fetching updated files
+        setTimeout(() => fetchUploadedFiles(), 500);
+      }
     } catch (err) {
-      console.error('File upload error:', err);
-      alert('File upload failed');
+      if (err.name === 'AbortError') {
+        alert('Upload timed out. Please try again with a smaller file.');
+      } else {
+        console.error('File upload error:', err);
+        alert('File upload failed');
+      }
     }
   };
   
@@ -358,9 +508,28 @@ const PatientDashboard = () => {
         headers: { Authorization: `Bearer ${token}` },
       });
       
+      // Update local state immediately
+      if (currentAccessLevel === 'readWrite') {
+        // When restricting access, we'll change the access level in the local state
+        setAccessGrants(prevGrants => 
+          prevGrants.map(grant => 
+            grant.doctorId._id === doctorId 
+              ? { ...grant, accessLevel: 'read' } 
+              : grant
+          )
+        );
+      } else {
+        // When revoking access completely, remove the grant from local state
+        setAccessGrants(prevGrants => 
+          prevGrants.filter(grant => grant.doctorId._id !== doctorId)
+        );
+      }
+      
       const actionType = currentAccessLevel === 'readWrite' ? 'restricted to read-only' : 'revoked';
       alert(`Access ${actionType} successfully`);
-      fetchAllData(); // Refresh data
+      
+      // Also refresh all data to ensure everything is up to date
+      fetchAllData();
     } catch (err) {
       console.error('Error revoking access:', err);
       setError('Failed to change access permissions');
@@ -419,17 +588,21 @@ const PatientDashboard = () => {
   // Add this function to handle profile photo upload
   const handleProfilePhotoChange = (e) => {
     if (e.target.files && e.target.files[0]) {
-      setProfilePhotoFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      console.log('Selected profile photo:', selectedFile.name, 'Size:', Math.round(selectedFile.size/1024), 'KB');
+      
+      setProfilePhotoFile(selectedFile);
       
       // Create a preview URL for the image
       const reader = new FileReader();
       reader.onload = (event) => {
+        console.log('Preview created for profile photo');
         setPersonalInfo(prev => ({
           ...prev,
           profilePhoto: event.target.result
         }));
       };
-      reader.readAsDataURL(e.target.files[0]);
+      reader.readAsDataURL(selectedFile);
     }
   };
   
@@ -1206,7 +1379,7 @@ const PatientDashboard = () => {
                                 {img.imageUrl && (
                                   <div className="mb-2">
                                     <a 
-                                      href={img.imageUrl} 
+                                      href={getImageUrl(img.imageUrl)} 
                                       target="_blank" 
                                       rel="noopener noreferrer" 
                                       className="inline-flex items-center px-3 py-2 border border-blue-300 text-sm leading-4 font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 focus:outline-none"
@@ -1276,37 +1449,7 @@ const PatientDashboard = () => {
               <div className="mt-6">
                 <h3 className="font-medium text-gray-700 mb-3">Uploaded Documents</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {uploadedFiles.map((file, index) => (
-                    <div key={index} className="border rounded-lg overflow-hidden">
-                      {file.mimetype?.includes('image') ? (
-                        <div className="h-32 bg-gray-100">
-                          <img 
-                            src={`${apiUrl}${file.path.replace(/\\/g, '/').replace('uploads', '/uploads')}`} 
-                            alt={file.originalname} 
-                            className="w-full h-full object-contain"
-                          />
-                        </div>
-                      ) : (
-                        <div className="h-32 bg-gray-100 flex items-center justify-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </div>
-                      )}
-                      <div className="p-2">
-                        <p className="text-sm font-medium truncate">{file.originalname}</p>
-                        <p className="text-xs text-gray-500">{new Date(file.createdAt).toLocaleDateString()}</p>
-                        <a 
-                          href={`${apiUrl}${file.path.replace(/\\/g, '/').replace('uploads', '/uploads')}`} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="text-xs text-blue-600 hover:underline mt-1 inline-block"
-                        >
-                          View Document
-                        </a>
-                      </div>
-                    </div>
-                  ))}
+                  {uploadedFiles.map((file, index) => (                    <div key={index} className="border rounded-lg overflow-hidden">                      {file.mimetype?.includes('image') ? (                        <div className="h-32 bg-gray-100">                          <img                             src={debugImageUrl(getImageUrl(file.filename), 'uploaded file')}                             alt={file.originalname}                             className="w-full h-full object-contain"                            onError={(e) => {                              e.target.onerror = null;                              e.target.src = "https://via.placeholder.com/150?text=Image+Not+Found";                              console.error("Failed to load image:", file.filename);                            }}                          />                        </div>                      ) : (                        <div className="h-32 bg-gray-100 flex items-center justify-center">                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />                          </svg>                        </div>                      )}                      <div className="p-2">                        <p className="text-sm font-medium truncate">{file.originalname}</p>                        <p className="text-xs text-gray-500">{new Date(file.createdAt).toLocaleDateString()}</p>                        <a                           href={debugImageUrl(getImageUrl(file.filename), 'document link')}                           target="_blank"                           rel="noopener noreferrer"                          className="text-xs text-blue-600 hover:underline mt-1 inline-block"                          onClick={(e) => {                            console.log('Opening document:', getImageUrl(file.filename));                          }}                        >                          View Document                        </a>                      </div>                    </div>                  ))}
                 </div>
               </div>
             )}
@@ -1339,8 +1482,8 @@ const PatientDashboard = () => {
                 </select>
                 <p className="mt-1 text-xs text-gray-500">
                   {doctors.length === 0 
-                    ? "No doctors available. You must grant write access to doctors before booking appointments." 
-                    : "Only doctors with full access to your records can be booked for appointments."}
+                    ? "No doctors are available in the system. Please try again later." 
+                    : "All available doctors are shown. Appointment requests will be confirmed by doctors."}
                 </p>
               </div>
               
@@ -1448,9 +1591,14 @@ const PatientDashboard = () => {
                 <div className="w-32 h-32 rounded-full overflow-hidden border-2 border-gray-300 mb-3">
                   {personalInfo.profilePhoto ? (
                     <img 
-                      src={personalInfo.profilePhoto.startsWith('data') ? personalInfo.profilePhoto : `${apiUrl}${personalInfo.profilePhoto}`} 
+                      src={debugImageUrl(getImageUrl(personalInfo.profilePhoto), 'profile edit')} 
                       alt="Profile" 
                       className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = "https://via.placeholder.com/150?text=Profile";
+                        console.error("Failed to load profile photo");
+                      }}
                     />
                   ) : (
                     <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">
@@ -1523,9 +1671,14 @@ const PatientDashboard = () => {
                 <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-gray-300 mr-6 mb-4 md:mb-0 flex-shrink-0">
                   {patientInfo?.profilePhoto ? (
                     <img 
-                      src={`${apiUrl}${patientInfo.profilePhoto}`} 
+                      src={debugImageUrl(getImageUrl(patientInfo.profilePhoto), 'profile info')} 
                       alt="Profile" 
                       className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = "https://via.placeholder.com/150?text=Profile";
+                        console.error("Failed to load profile photo in info section");
+                      }}
                     />
                   ) : (
                     <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">

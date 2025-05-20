@@ -24,16 +24,20 @@ const Register = () => {
   const [pdfData, setPdfData] = useState(null);
   const [hospitals, setHospitals] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [filteredDepartments, setFilteredDepartments] = useState([]);
+  const [isHospitalSelected, setIsHospitalSelected] = useState(false);
+  const [hospitalEmailDomain, setHospitalEmailDomain] = useState('');
   
   const { register } = useAuth();
   const navigate = useNavigate();
   
-  // Check if admin exists
+  // API base URL from environment variable or default
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  
+  // Check if admin exists and fetch hospitals and departments
   useEffect(() => {
     const checkAdminExists = async () => {
       try {
-        // This would need a real API endpoint in production
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
         const res = await axios.get(`${apiUrl}/auth/check-admin-exists`);
         setAdminExists(res.data.exists);
       } catch (error) {
@@ -42,36 +46,104 @@ const Register = () => {
         setAdminExists(false);
       }
     };
+
+    const fetchHospitalsAndDepartments = async () => {
+      try {
+        // Define the URLs to use
+        const hospitalsUrl = `${apiUrl}/auth/hospitals`;
+        
+        console.log('Fetching hospitals from:', hospitalsUrl);
+        
+        const hospitalsRes = await axios.get(hospitalsUrl);
+        
+        if (hospitalsRes.data.success) {
+          console.log('Successfully fetched hospitals:', hospitalsRes.data);
+          setHospitals(hospitalsRes.data.data || []);
+        }
+        
+        // We'll fetch departments only when a hospital is selected
+      } catch (error) {
+        console.error("Error fetching hospitals:", error);
+        console.error("Request URL:", error.config?.url);
+        
+        // Set fallback mock data if API fails
+        setHospitals([
+          { code: 'MH1', name: 'Manipal Hospital', emailDomain: 'manipal.com' },
+          { code: 'AH2', name: 'Apollo Hospital', emailDomain: 'apollo.com' },
+          { code: 'FH3', name: 'Fortis Hospital', emailDomain: 'fortis.com' },
+          { code: 'MH4', name: 'Max Healthcare', emailDomain: 'maxhealthcare.com' },
+          { code: 'AIIMS5', name: 'AIIMS', emailDomain: 'aiims.edu' }
+        ]);
+      }
+    };
     
-    // For now, we'll assume no admin exists since we're just setting up
-    // checkAdminExists();
-    setAdminExists(false);
-    
-    // Mock hospitals and departments for initial setup
-    setHospitals([
-      { code: 'MH1', name: 'Manipal Hospital' },
-      { code: 'AH2', name: 'Apollo Hospital' },
-      { code: 'FH3', name: 'Fortis Hospital' },
-      { code: 'CH4', name: 'CARE Hospital' },
-      { code: 'MH5', name: 'Max Hospital' }
-    ]);
-    
-    setDepartments([
-      { code: 'ORTHO', name: 'Orthopedics' },
-      { code: 'CARDIO', name: 'Cardiology' },
-      { code: 'NEURO', name: 'Neurology' },
-      { code: 'ONCO', name: 'Oncology' },
-      { code: 'GEN', name: 'General Medicine' }
-    ]);
-  }, []);
+    checkAdminExists();
+    fetchHospitalsAndDepartments();
+  }, [apiUrl]);
   
   const handleRoleChange = (e) => {
     setRole(e.target.value);
+    // Reset hospital and department selections when role changes
+    setFormData({
+      ...formData,
+      hospitalCode: '',
+      departmentCode: ''
+    });
+    setIsHospitalSelected(false);
+    setHospitalEmailDomain('');
   };
   
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
+    
+    // When hospital changes, update department options and email domain
+    if (name === 'hospitalCode') {
+      setFormData({ 
+        ...formData, 
+        hospitalCode: value,
+        departmentCode: '' // Reset department when hospital changes
+      });
+      
+      // Enable or disable department dropdown based on hospital selection
+      setIsHospitalSelected(!!value);
+      
+      // Get the selected hospital's email domain
+      if (value) {
+        const selectedHospital = hospitals.find(h => h.code === value);
+        if (selectedHospital && selectedHospital.emailDomain) {
+          setHospitalEmailDomain(selectedHospital.emailDomain);
+        } else {
+          setHospitalEmailDomain('');
+        }
+        
+        // Fetch departments for this specific hospital
+        fetchDepartmentsForHospital(value);
+      } else {
+        setHospitalEmailDomain('');
+      }
+    }
+  };
+  
+  // Function to fetch departments for a specific hospital
+  const fetchDepartmentsForHospital = async (hospitalCode) => {
+    try {
+      console.log(`Fetching departments for hospital: ${hospitalCode}`);
+      const departmentsUrl = `${apiUrl}/auth/departments?hospitalCode=${hospitalCode}`;
+      
+      const response = await axios.get(departmentsUrl);
+      
+      if (response.data.success) {
+        console.log('Successfully fetched hospital-specific departments:', response.data.data);
+        setDepartments(response.data.data || []);
+      } else {
+        console.error('Failed to fetch departments for hospital:', response.data.message);
+        setDepartments([]); // Empty the departments if none found
+      }
+    } catch (error) {
+      console.error(`Error fetching departments for hospital ${hospitalCode}:`, error);
+      setDepartments([]); // Empty the departments on error
+    }
   };
   
   const handleSubmit = async (e) => {
@@ -96,10 +168,9 @@ const Register = () => {
       
       // Doctor email validation (should be from hospital domain)
       const emailDomain = formData.email.split('@')[1];
-      const validDomain = 'hospital.com'; // Example - should match with backend validation
       
-      if (!emailDomain || !emailDomain.includes(validDomain)) {
-        setError(`Doctors must register with a valid hospital email domain (e.g. @${validDomain})`);
+      if (!emailDomain || emailDomain.toLowerCase() !== hospitalEmailDomain.toLowerCase()) {
+        setError(`Doctors must register with the hospital's email domain: @${hospitalEmailDomain}`);
         setIsLoading(false);
         return;
       }
@@ -373,7 +444,8 @@ const Register = () => {
                       value={formData.departmentCode}
                       onChange={handleChange}
                       required
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={!isHospitalSelected}
+                      className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${!isHospitalSelected ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                     >
                       <option value="">Select Department</option>
                       {departments.map(dept => (
@@ -382,6 +454,11 @@ const Register = () => {
                         </option>
                       ))}
                     </select>
+                    {!isHospitalSelected && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Select a hospital first
+                      </p>
+                    )}
                   </div>
                 </div>
                 
@@ -419,8 +496,11 @@ const Register = () => {
                 
                 <div className="mb-4 p-3 bg-yellow-100 text-yellow-700 rounded-md text-sm">
                   <p className="font-semibold">Note:</p>
-                  <p>Doctors must register with a valid hospital email domain (e.g. doctor@hospital.com). 
-                     Your registration will be verified by an administrator.</p>
+                  {hospitalEmailDomain ? (
+                    <p>Doctors must register with the hospital's email domain: @{hospitalEmailDomain}</p>
+                  ) : (
+                    <p>Please select a hospital to see the required email domain for registration.</p>
+                  )}
                 </div>
               </>
             )}

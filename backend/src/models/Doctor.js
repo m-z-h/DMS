@@ -26,6 +26,14 @@ const doctorSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true
+  },
+  specialization: {
+    type: String,
+    default: ''
+  },
+  profilePhoto: {
+    type: String,
+    default: null
   }
 });
 

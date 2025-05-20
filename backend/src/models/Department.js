@@ -16,6 +16,12 @@ const departmentSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  hospitalCode: {
+    type: String,
+    required: true,
+    trim: true,
+    ref: 'Hospital'
+  },
   isActive: {
     type: Boolean,
     default: true

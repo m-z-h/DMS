@@ -1,11 +1,13 @@
 const User = require('../models/User');
 const Doctor = require('../models/Doctor');
 const Patient = require('../models/Patient');
+const Hospital = require('../models/Hospital');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { generatePDF } = require('../utils/pdfGenerator');
 const mongoose = require('mongoose');
+const Department = require('../models/Department');
 
 // Helper function to generate access code
 const generateAccessCode = () => {
@@ -57,20 +59,29 @@ exports.register = async (req, res) => {
 
     // For doctors, validate email domain against hospital domains
     if (role === 'Doctor') {
-      // Get hospital by code to verify email domain
-      // This is a placeholder - you would implement actual hospital validation
-      const isValidHospitalEmail = email.endsWith('@hospital.com');
-      if (!isValidHospitalEmail) {
-        return res.status(400).json({
-          success: false,
-          message: 'Doctor registration requires a valid hospital email domain'
-        });
-      }
-
+      // Verify required doctor fields
       if (!hospitalCode || !departmentCode || !licenseNo || !contactNo) {
         return res.status(400).json({
           success: false,
           message: 'Missing required doctor information'
+        });
+      }
+
+      // Get hospital by code to verify email domain
+      const hospital = await Hospital.findOne({ code: hospitalCode });
+      if (!hospital) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid hospital code'
+        });
+      }
+
+      // Extract email domain and verify against hospital domain
+      const emailDomain = email.split('@')[1];
+      if (!emailDomain || emailDomain.toLowerCase() !== hospital.emailDomain.toLowerCase()) {
+        return res.status(400).json({
+          success: false,
+          message: `Doctor registration requires an email with the hospital's domain: ${hospital.emailDomain}`
         });
       }
     }
@@ -214,6 +225,106 @@ exports.getMe = async (req, res) => {
       }
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
+// Get hospitals (public endpoint for registration)
+exports.getHospitals = async (req, res) => {
+  try {
+    console.log('Getting hospitals for registration');
+    const hospitals = await Hospital.find({ isActive: true }).select('name code emailDomain').sort({ name: 1 });
+    
+    console.log(`Found ${hospitals.length} hospitals`);
+    
+    if (hospitals.length === 0) {
+      // No hospitals found, provide default data
+      const defaultHospitals = [
+        { 
+          _id: 'default1', 
+          name: 'Manipal Hospital', 
+          code: 'MH1',
+          emailDomain: 'manipal.com',
+          isActive: true 
+        },
+        { 
+          _id: 'default2', 
+          name: 'Apollo Hospital', 
+          code: 'AH2',
+          emailDomain: 'apollo.com',
+          isActive: true 
+        },
+        { 
+          _id: 'default3', 
+          name: 'Fortis Hospital', 
+          code: 'FH3',
+          emailDomain: 'fortis.com',
+          isActive: true 
+        }
+      ];
+      
+      return res.status(200).json({
+        success: true,
+        count: defaultHospitals.length,
+        data: defaultHospitals,
+        message: 'Using default hospital data'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      count: hospitals.length,
+      data: hospitals
+    });
+  } catch (error) {
+    console.error('Error getting hospitals:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
+// Get departments (public endpoint for registration)
+exports.getDepartments = async (req, res) => {
+  try {
+    console.log('Getting departments for registration');
+    
+    // Check if filtering by hospital code
+    const { hospitalCode } = req.query;
+    
+    let query = { isActive: true };
+    if (hospitalCode) {
+      console.log(`Filtering departments by hospital code: ${hospitalCode}`);
+      query.hospitalCode = hospitalCode;
+    }
+    
+    const departments = await Department.find(query).select('name code hospitalCode').sort({ name: 1 });
+    
+    console.log(`Found ${departments.length} departments${hospitalCode ? ' for hospital ' + hospitalCode : ''}`);
+    
+    if (departments.length === 0 && hospitalCode) {
+      // If no departments found for this hospital, return a helpful message
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        data: [],
+        message: `No departments found for hospital code ${hospitalCode}`
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      count: departments.length,
+      data: departments
+    });
+  } catch (error) {
+    console.error('Error getting departments:', error);
     res.status(500).json({
       success: false,
       message: 'Server Error',

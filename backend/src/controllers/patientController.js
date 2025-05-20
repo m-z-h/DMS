@@ -244,7 +244,22 @@ exports.updatePersonalInfo = async (req, res) => {
     if (dateOfBirth) patient.dateOfBirth = dateOfBirth;
     if (contactNo) patient.contactNo = contactNo;
     if (address) patient.address = address;
-    if (profilePhoto !== undefined) patient.profilePhoto = profilePhoto;
+    
+    // Handle profile photo update
+    if (profilePhoto !== undefined) {
+      if (profilePhoto && profilePhoto.startsWith('data:')) {
+        // This is a data URL, handle accordingly
+        console.log('Received data URL for profile photo');
+        patient.profilePhoto = profilePhoto;
+      } else if (profilePhoto) {
+        // This is a filename, store just the filename
+        patient.profilePhoto = profilePhoto.includes('/') 
+          ? profilePhoto.split('/').pop() 
+          : profilePhoto;
+      } else {
+        patient.profilePhoto = null;
+      }
+    }
 
     await patient.save();
 
@@ -386,7 +401,7 @@ exports.revokeDoctorAccess = async (req, res) => {
       });
     }
 
-    // Find and update the grant
+    // Find the grant
     const grant = await AccessGrant.findOne({
       patientId: patient._id,
       doctorId
@@ -399,15 +414,26 @@ exports.revokeDoctorAccess = async (req, res) => {
       });
     }
 
-    // Instead of revoking completely, just downgrade to read-only access
-    // This allows doctors to still see records they've previously created/accessed
-    grant.accessLevel = 'read'; // Downgrade to read-only
-    await grant.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Access restricted to read-only successfully'
-    });
+    // Check current access level
+    if (grant.accessLevel === 'readWrite') {
+      // If currently has readWrite access, downgrade to read-only
+      grant.accessLevel = 'read'; // Downgrade to read-only
+      await grant.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Access restricted to read-only successfully'
+      });
+    } else {
+      // If already at read-only, completely revoke by setting isActive to false
+      grant.isActive = false;
+      await grant.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Access completely revoked successfully'
+      });
+    }
   } catch (error) {
     console.error('Error revoking access:', error);
     res.status(500).json({

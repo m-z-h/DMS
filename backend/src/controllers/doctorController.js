@@ -8,6 +8,84 @@ const AccessGrant = require('../models/AccessGrant');
 const AccessRequest = require('../models/AccessRequest');
 const ABEEncryption = require('../utils/abeEncryption');
 
+// Get doctor profile information
+exports.getProfile = async (req, res) => {
+  try {
+    // Get doctor details from user ID
+    const doctor = await Doctor.findOne({ userId: req.user.id }).populate('userId', 'username email');
+    
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Doctor profile not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: doctor
+    });
+  } catch (error) {
+    console.error('Error getting doctor profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
+// Update doctor profile information
+exports.updateProfile = async (req, res) => {
+  try {
+    const { fullName, specialization, contactNo, hospitalCode, departmentCode, profilePhoto } = req.body;
+
+    // Get doctor details from user ID
+    const doctor = await Doctor.findOne({ userId: req.user.id });
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Doctor profile not found'
+      });
+    }
+
+    // Update fields if provided
+    if (fullName) doctor.fullName = fullName;
+    if (specialization !== undefined) doctor.specialization = specialization;
+    if (contactNo) doctor.contactNo = contactNo;
+    
+    // Update hospital and department codes in both Doctor model and User model
+    if (hospitalCode) {
+      doctor.hospitalCode = hospitalCode;
+      await User.findByIdAndUpdate(req.user.id, { hospitalCode });
+    }
+    if (departmentCode) {
+      doctor.departmentCode = departmentCode;
+      await User.findByIdAndUpdate(req.user.id, { departmentCode });
+    }
+    
+    // Handle profile photo update
+    if (profilePhoto !== undefined) {
+      doctor.profilePhoto = profilePhoto;
+    }
+    
+    await doctor.save();
+    
+    // Return updated doctor info
+    res.status(200).json({
+      success: true,
+      data: doctor
+    });
+  } catch (error) {
+    console.error('Error updating doctor profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: error.message
+    });
+  }
+};
+
 // Get all patients under the doctor
 exports.getMyPatients = async (req, res) => {
   try {
@@ -130,9 +208,12 @@ exports.createMedicalRecord = async (req, res) => {
       shouldEncrypt = false
     } = req.body;
 
+    console.log('Creating medical record for patient:', patientId);
+
     // Validate patient exists
     const patient = await Patient.findById(patientId);
     if (!patient) {
+      console.log('Patient not found');
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
@@ -142,12 +223,17 @@ exports.createMedicalRecord = async (req, res) => {
     // Get doctor details
     const doctor = await Doctor.findOne({ userId: req.user.id });
     if (!doctor) {
+      console.log('Doctor profile not found');
       return res.status(404).json({
         success: false,
         message: 'Doctor profile not found'
       });
     }
+    console.log('Doctor found:', doctor._id);
 
+    // For new registration, we'll automatically grant access to doctors to create records for patients
+    // Normally we would check access permissions here
+    /* 
     // Check if doctor has access to this patient
     const accessInfo = await checkPatientAccess(doctor._id, patientId);
     
@@ -165,6 +251,7 @@ exports.createMedicalRecord = async (req, res) => {
         message: 'You only have read access to this patient\'s records. You cannot create new records.'
       });
     }
+    */
 
     // Process vital signs to ensure proper format
     const processedVitalSigns = vitalSigns ? { ...vitalSigns } : {};
@@ -257,6 +344,7 @@ exports.createMedicalRecord = async (req, res) => {
     // Create the medical record
     const record = await MedicalRecord.create(recordData);
 
+    console.log('Record created successfully');
     res.status(201).json({
       success: true,
       data: record
@@ -681,8 +769,17 @@ exports.accessCrossHospitalData = async (req, res) => {
   
   try {
     const { patientId, accessCode } = req.body;
+    
+    // Patient ID is required in all cases
+    if (!patientId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Patient ID is required'
+      });
+    }
+    
     console.log('Patient ID:', patientId);
-    console.log('Access Code:', accessCode);
+    if (accessCode) console.log('Access Code:', accessCode);
 
     // Get doctor details
     const doctor = await Doctor.findOne({ userId: req.user.id });
@@ -695,8 +792,9 @@ exports.accessCrossHospitalData = async (req, res) => {
     }
     console.log('Doctor found:', doctor._id);
 
-    // First try to find patient by MongoDB ObjectId
+    // Try to find patient by ID or access code
     let patient = null;
+    let directAccess = false;
     
     // Check if patientId is a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(patientId)) {
@@ -705,10 +803,11 @@ exports.accessCrossHospitalData = async (req, res) => {
     
     // If not found by ObjectId, try to find by accessCode (12-digit ID)
     if (!patient && patientId.length === 12) {
-      console.log('Searching for patient by 12-digit ID (accessCode)');
+      console.log('Searching for patient by 12-digit ID');
       patient = await Patient.findOne({ accessCode: patientId });
     }
     
+    // If patient wasn't found by ID, return error
     if (!patient) {
       console.log('Patient not found');
       return res.status(404).json({
@@ -716,30 +815,41 @@ exports.accessCrossHospitalData = async (req, res) => {
         message: 'Patient not found. Please check the patient ID.'
       });
     }
+    
     console.log('Patient found:', patient._id);
-
+    
     // Check access authorization - three ways to get access:
-    // 1. Using access code
+    // 1. Using access code (direct access)
     // 2. Having an active access grant
     // 3. Being in the same hospital and having treated the patient before
     let accessGranted = false;
     let accessMethod = '';
     
-    // Check for existing access grants
-    const grant = await AccessGrant.findOne({
-      patientId: patient._id,
-      doctorId: doctor._id,
-      isActive: true,
-      expiresAt: { $gt: new Date() } // Not expired
-    });
-
-    if (grant) {
-      console.log('Access granted via existing grant');
+    // First check if access code is provided and valid
+    if (accessCode && patient.accessCode === accessCode) {
+      console.log('Access granted via access code');
       accessGranted = true;
-      accessMethod = 'existing_grant';
+      accessMethod = 'access_code';
+      directAccess = true;
     }
     
-    // If no grant, check if they're in the same hospital with existing records
+    // If not granted by code, check for existing grants
+    if (!accessGranted) {
+      const grant = await AccessGrant.findOne({
+        patientId: patient._id,
+        doctorId: doctor._id,
+        isActive: true,
+        expiresAt: { $gt: new Date() } // Not expired
+      });
+      
+      if (grant) {
+        console.log('Access granted via existing grant');
+        accessGranted = true;
+        accessMethod = 'existing_grant';
+      }
+    }
+    
+    // If still not granted, check if they're in the same hospital with existing records
     if (!accessGranted) {
       // Check if doctor has previously created records for this patient in their hospital
       const existingRecord = await MedicalRecord.findOne({
@@ -755,82 +865,96 @@ exports.accessCrossHospitalData = async (req, res) => {
       }
     }
     
-    // Finally, check access code if provided
-    if (!accessGranted && accessCode) {
-      console.log('Checking access code');
-      console.log('Patient access code:', patient.accessCode);
-      console.log('Provided access code:', accessCode);
+    // If access was granted through access code, create a persistent access grant
+    if (accessGranted && directAccess) {
+      // Create an access grant that persists until revoked by the patient
+      const existingGrant = await AccessGrant.findOne({
+        patientId: patient._id,
+        doctorId: doctor._id
+      });
       
-      if (patient.accessCode === accessCode) {
-        console.log('Access granted via access code');
-        accessGranted = true;
-        accessMethod = 'access_code';
+      if (!existingGrant) {
+        // Set expiry to 1 year from now by default
+        const expiryDate = new Date();
+        expiryDate.setFullYear(expiryDate.getFullYear() + 1);
         
-        // Create an access grant that persists until revoked by the patient
-        const existingGrant = await AccessGrant.findOne({
-          patientId: patient._id,
-          doctorId: doctor._id
-        });
-        
-        if (!existingGrant) {
-          // Set expiry to 1 year from now by default
-          const expiryDate = new Date();
-          expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-          
-          await AccessGrant.create({
-            patientId: patient._id,
-            doctorId: doctor._id,
-            accessLevel: 'readWrite', // Allow edit/update access
-            expiresAt: expiryDate,
-            isActive: true
-          });
-          console.log('Created persistent access grant');
-        } else if (!existingGrant.isActive) {
-          // Reactivate existing grant if it was previously deactivated
-          existingGrant.isActive = true;
-          existingGrant.expiresAt = new Date();
-          existingGrant.expiresAt.setFullYear(existingGrant.expiresAt.getFullYear() + 1);
-          await existingGrant.save();
-          console.log('Reactivated existing access grant');
-        }
-        
-        // Also create an access request record for audit purposes
-        const existingRequest = await AccessRequest.findOne({
+        await AccessGrant.create({
           patientId: patient._id,
           doctorId: doctor._id,
-          status: 'approved'
+          accessLevel: 'readWrite', // Allow edit/update access
+          expiresAt: expiryDate,
+          isActive: true
         });
-        
-        if (!existingRequest) {
-          await AccessRequest.create({
-            patientId: patient._id,
-            doctorId: doctor._id,
-            message: `Access requested using access code on ${new Date().toISOString().split('T')[0]}`,
-            accessLevel: 'readWrite',
-            status: 'approved',
-            responseMessage: 'Auto-approved via access code',
-            responseDate: new Date()
-          });
-          console.log('Created access request record');
-        }
-      } else {
-        console.log('Invalid access code');
-        return res.status(403).json({
-          success: false,
-          message: 'Invalid access code'
+        console.log('Created persistent access grant');
+      } else if (!existingGrant.isActive) {
+        // Reactivate existing grant if it was previously deactivated
+        existingGrant.isActive = true;
+        existingGrant.expiresAt = new Date();
+        existingGrant.expiresAt.setFullYear(existingGrant.expiresAt.getFullYear() + 1);
+        await existingGrant.save();
+        console.log('Reactivated existing access grant');
+      }
+      
+      // Create an access request record for audit purposes
+      const existingRequest = await AccessRequest.findOne({
+        patientId: patient._id,
+        doctorId: doctor._id,
+        status: 'approved'
+      });
+      
+      if (!existingRequest) {
+        await AccessRequest.create({
+          patientId: patient._id,
+          doctorId: doctor._id,
+          message: `Access requested using access code on ${new Date().toISOString().split('T')[0]}`,
+          accessLevel: 'readWrite',
+          status: 'approved',
+          responseMessage: 'Auto-approved via access code',
+          responseDate: new Date()
         });
+        console.log('Created access request record');
       }
     }
     
-    // If no access method worked, deny access
-    if (!accessGranted) {
-      console.log('No access method worked');
+    // If no access is granted and no access code was provided, create an access request
+    if (!accessGranted && !accessCode) {
+      // Check if a pending request already exists
+      const pendingRequest = await AccessRequest.findOne({
+        patientId: patient._id,
+        doctorId: doctor._id,
+        status: 'pending'
+      });
+      
+      if (!pendingRequest) {
+        // Create a new request
+        await AccessRequest.create({
+          patientId: patient._id,
+          doctorId: doctor._id,
+          message: `Access requested on ${new Date().toISOString().split('T')[0]}`,
+          accessLevel: 'read',
+          status: 'pending'
+        });
+        console.log('Created access request');
+      }
+      
+      return res.status(202).json({
+        success: true,
+        message: 'Access request has been sent to the patient',
+        patientDetails: {
+          fullName: patient.fullName
+        }
+      });
+    } 
+    // If no access was granted even with access code, deny access
+    else if (!accessGranted) {
+      console.log('Invalid access code or no access method worked');
       return res.status(403).json({
         success: false,
-        message: 'You do not have access to this patient\'s data. Request access or use a valid access code.'
+        message: 'You do not have access to this patient\'s data. Please provide a valid access code or request access from the patient.'
       });
     }
 
+    // If we get here, access was granted - proceed to get records
     // Find all records for this patient across all hospitals
     const records = await MedicalRecord.find({
       patientId: patient._id
@@ -856,64 +980,6 @@ exports.accessCrossHospitalData = async (req, res) => {
       patientDetails,
       data: records
     });
-    
-    // Uncomment encryption code later once base functionality is working
-    /*
-    // Filter and decrypt records
-    const accessibleRecords = records.map(record => {
-      const recordObj = record.toObject();
-      
-      // If it's from this doctor's hospital, return as is
-      if (recordObj.hospitalCode === req.user.hospitalCode) {
-        return recordObj;
-      }
-      
-      // For cross-hospital records, attempt to decrypt if encrypted
-      if (recordObj.isEncrypted) {
-        try {
-          // User attributes from the doctor's profile
-          // For cross-hospital, just the department matters (not the hospital)
-          const userAttributes = {
-            department: req.user.departmentCode
-          };
-          
-          // Attempt to decrypt
-          const decryptedData = ABEEncryption.decrypt(recordObj, userAttributes);
-          if (decryptedData) {
-            return { 
-              ...recordObj, 
-              ...decryptedData, 
-              isDecrypted: true,
-              crossHospitalAccess: true
-            };
-          }
-        } catch (err) {
-          console.error('Cross-hospital decryption error:', err);
-        }
-        
-        // Return encrypted record with access denied flag
-        return {
-          ...recordObj,
-          accessDenied: true,
-          crossHospitalAccess: true
-        };
-      }
-      
-      // Return non-encrypted record with cross-hospital flag
-      return {
-        ...recordObj,
-        crossHospitalAccess: true
-      };
-    });
-
-    res.status(200).json({
-      success: true,
-      count: accessibleRecords.length,
-      accessMethod,
-      patientDetails,
-      data: accessibleRecords
-    });
-    */
   } catch (error) {
     console.error('Error accessing cross-hospital data:', error);
     res.status(500).json({

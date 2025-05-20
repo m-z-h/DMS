@@ -10,7 +10,9 @@ const {
   updateAppointmentStatus,
   accessCrossHospitalData,
   requestPatientAccess,
-  getMyAccessRequests
+  getMyAccessRequests,
+  getProfile,
+  updateProfile
 } = require('../controllers/doctorController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -23,6 +25,12 @@ router.use(authorize('Doctor'));
 
 // Debug logging
 console.log('Doctor routes registered:');
+
+// Profile management
+console.log('GET /profile');
+router.get('/profile', getProfile);
+console.log('PUT /profile');
+router.put('/profile', updateProfile);
 
 // Patient routes
 console.log('GET /patients');

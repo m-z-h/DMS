@@ -5,11 +5,20 @@ const fs = require('fs');
 exports.uploadFile = async (req, res) => {
   try {
     if (!req.file) {
+      console.log('No file received in request');
       return res.status(400).json({
         success: false,
         message: 'No file uploaded'
       });
     }
+
+    console.log('File uploaded successfully:', {
+      filename: req.file.filename,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path
+    });
 
     // File has been uploaded and is available in req.file
     // Return file information
@@ -38,9 +47,11 @@ exports.uploadFile = async (req, res) => {
 exports.getPatientFiles = async (req, res) => {
   try {
     const uploadsDir = path.join(__dirname, '../../uploads');
+    console.log('Looking for files in:', uploadsDir);
     
     // Check if directory exists
     if (!fs.existsSync(uploadsDir)) {
+      console.log('Uploads directory not found');
       return res.status(200).json({
         success: true,
         message: 'No uploads directory found',
@@ -50,6 +61,7 @@ exports.getPatientFiles = async (req, res) => {
     
     // Read all files in the uploads directory
     const files = fs.readdirSync(uploadsDir);
+    console.log(`Found ${files.length} files in uploads directory`);
     
     // Get file details
     const fileDetails = files.map(filename => {

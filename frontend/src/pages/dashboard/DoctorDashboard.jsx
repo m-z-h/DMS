@@ -12,6 +12,20 @@ const DoctorDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
+  // Add doctor profile state
+  const [doctorProfile, setDoctorProfile] = useState(null);
+  const [profileUpdateForm, setProfileUpdateForm] = useState({
+    fullName: '',
+    specialization: '',
+    contactNo: '',
+    hospitalCode: '',
+    departmentCode: '',
+    profilePhoto: null
+  });
+  
+  // Add state for profile photo
+  const [profilePhotoFile, setProfilePhotoFile] = useState(null);
+  
   // Add state for cross-hospital accessed patient
   const [accessedPatient, setAccessedPatient] = useState(null);
   
@@ -71,8 +85,29 @@ const DoctorDashboard = () => {
           headers: { Authorization: `Bearer ${token}` }
         });
         
+        // Fetch doctor profile
+        const profileRes = await axios.get(`${apiUrl}/doctor/profile`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
         setPatients(patientsRes.data.data || []);
         setAppointments(appointmentsRes.data.data || []);
+        
+        // Set doctor profile and update form
+        if (profileRes.data.success && profileRes.data.data) {
+          const profile = profileRes.data.data;
+          setDoctorProfile(profile);
+          
+          // Initialize the update form with current values
+          setProfileUpdateForm({
+            fullName: profile.fullName || '',
+            specialization: profile.specialization || '',
+            contactNo: profile.contactNo || '',
+            hospitalCode: profile.hospitalCode || user?.hospitalCode || '',
+            departmentCode: profile.departmentCode || user?.departmentCode || '',
+            profilePhoto: profile.profilePhoto || null
+          });
+        }
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
         setError('Failed to load dashboard data');
@@ -82,7 +117,7 @@ const DoctorDashboard = () => {
     };
     
     fetchDashboardData();
-  }, [apiUrl]);
+  }, [apiUrl, user?.hospitalCode, user?.departmentCode]);
   
   const fetchPatientRecords = async (patientId) => {
     try {
@@ -264,39 +299,79 @@ const DoctorDashboard = () => {
     e.preventDefault();
     
     try {
-      // Validate patientId format (MongoDB ObjectId should be 24 characters hexadecimal or 12 digits for AABHAA ID)
-      const validObjectIdPattern = /^[0-9a-fA-F]{24}$/;
-      const validAabhaaIdPattern = /^\d{12}$/;
+      // Clear previous errors and any previously accessed patient
+      setError(null);
       
-      if (!validObjectIdPattern.test(crossHospitalAccess.patientId) && 
-          !validAabhaaIdPattern.test(crossHospitalAccess.patientId)) {
-        setError('Invalid patient ID format. Patient ID should be either a 24-character MongoDB ID or a 12-digit AABHAA ID.');
+      // Check if we have patientId (required)
+      const hasPatientId = crossHospitalAccess.patientId.trim() !== '';
+      const hasAccessCode = crossHospitalAccess.accessCode.trim() !== '';
+      
+      // We need a patientId
+      if (!hasPatientId) {
+        setError('Patient ID is required');
         return;
       }
       
-      setError(null);
+      // Prepare data for request - always include patientId
+      const requestData = {
+        patientId: crossHospitalAccess.patientId
+      };
+      
+      // Add accessCode if provided
+      if (hasAccessCode) {
+        requestData.accessCode = crossHospitalAccess.accessCode;
+      }
+
       const token = localStorage.getItem('token');
       
       const res = await axios.post(
         `${apiUrl}/doctor/access-cross-hospital`,
-        crossHospitalAccess,
+        requestData,
         {
           headers: { Authorization: `Bearer ${token}` }
         }
       );
       
-      setCrossHospitalRecords(res.data.data || []);
-      
-      // Save patient details if provided in the response
-      if (res.data.patientDetails) {
-        // Store the accessed patient for future use
-        setAccessedPatient(res.data.patientDetails);
+      // Handle different response types
+      if (res.status === 202) {
+        // Access request was created (not immediate access)
+        setCrossHospitalRecords([]);
+        setAccessedPatient(null);
+        
+        // Display success message to user
+        alert(`Access request sent to ${res.data.patientDetails?.fullName || 'the patient'}. You'll be notified when access is granted.`);
+        
+        // Clear the form
+        setCrossHospitalAccess({
+          patientId: '',
+          accessCode: ''
+        });
+      } else if (res.data.success) {
+        // Direct access granted
+        setCrossHospitalRecords(res.data.data || []);
+        
+        // Save patient details if provided in the response
+        if (res.data.patientDetails) {
+          // Store the accessed patient for future use
+          setAccessedPatient(res.data.patientDetails);
+        }
+        
+        // Clear form but show success message
+        setCrossHospitalAccess({
+          patientId: '',
+          accessCode: ''
+        });
+        
+        alert(`Access granted to patient records for ${res.data.patientDetails?.fullName || 'the patient'}.`);
       }
-      
-      alert('Cross-hospital data accessed successfully');
     } catch (err) {
       console.error('Error accessing data:', err);
-      setError(err.response?.data?.message || 'Failed to access cross-hospital data. Check patient ID and access code.');
+      // Reset any partial data
+      setCrossHospitalRecords([]);
+      setAccessedPatient(null);
+      
+      // Show error message
+      setError(err.response?.data?.message || 'Failed to access data. Please check the patient ID and access code.');
     }
   };
   
@@ -332,6 +407,126 @@ const DoctorDashboard = () => {
         [name]: value
       });
     }
+  };
+  
+  // Add function to update doctor profile
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
+    
+    try {
+      setError(null);
+      setLoading(true);
+      
+      const token = localStorage.getItem('token');
+      let profilePhotoUrl = profileUpdateForm.profilePhoto;
+      
+      // If there's a new profile photo, upload it first
+      if (profilePhotoFile) {
+        try {
+          const formData = new FormData();
+          formData.append('file', profilePhotoFile);
+          
+          const uploadRes = await axios.post(
+            `${apiUrl}/files/upload`,
+            formData,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'multipart/form-data',
+              }
+            }
+          );
+          
+          if (uploadRes.data.success) {
+            profilePhotoUrl = uploadRes.data.file.filename;
+          } else {
+            throw new Error('File upload failed');
+          }
+        } catch (uploadErr) {
+          console.error('Profile photo upload error:', uploadErr);
+          alert('Failed to upload profile photo. Profile information will be updated without the new photo.');
+        }
+      }
+      
+      // Create updated profile data with possibly new photo URL
+      const updatedProfile = {
+        ...profileUpdateForm,
+        profilePhoto: profilePhotoUrl
+      };
+      
+      const res = await axios.put(
+        `${apiUrl}/doctor/profile`,
+        updatedProfile,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      
+      if (res.data.success) {
+        setDoctorProfile(res.data.data);
+        
+        // Update the form with new data too
+        setProfileUpdateForm(prev => ({
+          ...prev,
+          profilePhoto: profilePhotoUrl
+        }));
+        
+        setProfilePhotoFile(null);
+        alert('Profile updated successfully');
+      } else {
+        throw new Error(res.data.message || 'Failed to update profile');
+      }
+    } catch (err) {
+      console.error('Error updating profile:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to update profile');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Add function to handle profile photo change
+  const handleProfilePhotoChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      console.log('Selected profile photo:', selectedFile.name, 'Size:', Math.round(selectedFile.size/1024), 'KB');
+      
+      setProfilePhotoFile(selectedFile);
+      
+      // Create a preview URL for the image
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        console.log('Preview created for profile photo');
+        setProfileUpdateForm(prev => ({
+          ...prev,
+          profilePhoto: event.target.result
+        }));
+      };
+      reader.readAsDataURL(selectedFile);
+    }
+  };
+
+  // Utility to construct proper image URLs
+  const getImageUrl = (filename) => {
+    if (!filename) return null;
+    
+    // If it's a data URL, keep as is
+    if (filename.startsWith('data:')) return filename;
+    
+    // If it's already a full URL, keep as is
+    if (filename.startsWith('http')) return filename;
+    
+    // Get API base URL from environment or default
+    const baseUrl = import.meta.env.VITE_API_URL 
+      ? import.meta.env.VITE_API_URL.replace('/api', '') // Remove /api if present
+      : window.location.origin; // Use origin as fallback
+    
+    // If it includes the full path like /uploads/filename, add domain
+    if (filename.startsWith('/uploads/')) {
+      return `${baseUrl}${filename}`;
+    }
+    
+    // Otherwise assume it's just a filename that needs the full path
+    return `${baseUrl}/uploads/${filename}`;
   };
 
   if (loading && !patients.length && !appointments.length) {
@@ -388,6 +583,16 @@ const DoctorDashboard = () => {
             onClick={() => setActiveTab('cross-hospital')}
           >
             Cross-Hospital Access
+          </button>
+          <button
+            className={`py-3 border-b-2 ${
+              activeTab === 'profile'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent hover:border-gray-300'
+            }`}
+            onClick={() => setActiveTab('profile')}
+          >
+            My Profile
           </button>
         </nav>
       </div>
@@ -939,12 +1144,12 @@ const DoctorDashboard = () => {
           <div className="col-span-1 bg-white p-6 rounded-lg shadow">
             <h2 className="text-lg font-semibold mb-4">Access Patient Records</h2>
             <p className="mb-4 text-sm text-gray-600">
-              Enter the patient ID and access code to view their records from other hospitals in your department.
+              Enter the patient ID to request access. If you also have the patient's access code, you'll get immediate access to their records.
             </p>
             
             <form onSubmit={handleAccessCrossHospitalData}>
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Patient ID</label>
+                <label className="block text-sm font-medium mb-1">Patient ID <span className="text-red-500">*</span></label>
                 <input
                   type="text"
                   name="patientId"
@@ -954,20 +1159,22 @@ const DoctorDashboard = () => {
                   required
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Patient ID must be a valid 24-character MongoDB ID or a 12-digit AABHAA ID.
+                  Required. Enter the patient's ID or 12-digit access code as ID.
                 </p>
               </div>
               
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Access Code</label>
+                <label className="block text-sm font-medium mb-1">Access Code (optional)</label>
                 <input
                   type="text"
                   name="accessCode"
                   value={crossHospitalAccess.accessCode}
                   onChange={(e) => handleInputChange(e, setCrossHospitalAccess, crossHospitalAccess)}
                   className="w-full p-2 border border-gray-300 rounded"
-                  required
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Optional. If provided with a valid patient ID, grants immediate access.
+                </p>
               </div>
               
               <button
@@ -1195,6 +1402,140 @@ const DoctorDashboard = () => {
                 <p>Access a patient using the form to view their records from all hospitals.</p>
               </>
             )}
+          </div>
+        </div>
+      )}
+      
+      {/* Profile Tab */}
+      {activeTab === 'profile' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Update Profile Form */}
+          <div className="bg-white p-6 rounded-lg shadow">
+                        <h2 className="text-lg font-semibold mb-4">Update Your Profile</h2>            <form onSubmit={handleUpdateProfile}>              {/* Profile Photo Upload */}              <div className="mb-6 flex flex-col items-center">                <div className="w-32 h-32 rounded-full overflow-hidden border-2 border-gray-300 mb-3">                  {profileUpdateForm.profilePhoto ? (                    <img                       src={getImageUrl(profileUpdateForm.profilePhoto)}                      alt="Profile"                       className="w-full h-full object-cover"                      onError={(e) => {                        e.target.onerror = null;                        e.target.src = "https://via.placeholder.com/150?text=Profile";                        console.error("Failed to load profile photo");                      }}                    />                  ) : (                    <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />                      </svg>                    </div>                  )}                </div>                <label className="cursor-pointer bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200">                  <input                    type="file"                    accept="image/*"                    className="hidden"                    onChange={handleProfilePhotoChange}                  />                  Change Photo                </label>              </div>                            <div className="mb-4">                <label className="block text-sm font-medium mb-1">Full Name</label>                <input                  type="text"                  name="fullName"                  value={profileUpdateForm.fullName}                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}                  className="w-full p-2 border border-gray-300 rounded"                  required                />              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Specialization</label>
+                <input
+                  type="text"
+                  name="specialization"
+                  value={profileUpdateForm.specialization}
+                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  required
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Contact Number</label>
+                <input
+                  type="tel"
+                  name="contactNo"
+                  value={profileUpdateForm.contactNo}
+                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}
+                  className="w-full p-2 border border-gray-300 rounded"
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Hospital Code</label>
+                <input
+                  type="text"
+                  name="hospitalCode"
+                  value={profileUpdateForm.hospitalCode}
+                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  required
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Department Code</label>
+                <input
+                  type="text"
+                  name="departmentCode"
+                  value={profileUpdateForm.departmentCode}
+                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  required
+                />
+              </div>
+              
+              <button
+                type="submit"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none"
+              >
+                Update Profile
+              </button>
+            </form>
+          </div>
+          
+          {/* Current Profile Information */}
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-4">Your Current Information</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm text-gray-500">Full Name</h3>
+                <p className="font-medium">{doctorProfile?.fullName || user?.name || 'Not set'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Email Address</h3>
+                <p className="font-medium">{user?.email || 'Not available'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Specialization</h3>
+                <p className="font-medium">{doctorProfile?.specialization || 'Not set'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Contact Number</h3>
+                <p className="font-medium">{doctorProfile?.contactNo || 'Not set'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Hospital</h3>
+                <p className="font-medium">{doctorProfile?.hospitalCode || user?.hospitalCode || 'Not set'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Department</h3>
+                <p className="font-medium">{doctorProfile?.departmentCode || user?.departmentCode || 'Not set'}</p>
+              </div>
+              
+              <div>
+                <h3 className="text-sm text-gray-500">Account ID</h3>
+                <p className="font-medium font-mono text-sm">{doctorProfile?._id || user?.id || 'Not available'}</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Hospital Settings */}
+          <div className="bg-white p-6 rounded-lg shadow lg:col-span-2">
+            <h2 className="text-lg font-semibold mb-4">Hospital Information</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Your hospital and department codes are used for patient record access control and ABE encryption.
+              Please ensure these are correctly set to enable proper functioning of the system.
+            </p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <h3 className="font-medium text-gray-700 mb-2">Hospital Code</h3>
+                <p>{doctorProfile?.hospitalCode || user?.hospitalCode || 'Not set'}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  This identifies your hospital in the system and is used for cross-hospital access.
+                </p>
+              </div>
+              
+              <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <h3 className="font-medium text-gray-700 mb-2">Department Code</h3>
+                <p>{doctorProfile?.departmentCode || user?.departmentCode || 'Not set'}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Your department code is used for ABE encryption policies.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}
