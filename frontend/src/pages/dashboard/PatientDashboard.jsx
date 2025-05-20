@@ -9,7 +9,7 @@ const PatientDashboard = () => {
     return url;
   };
   
-  // Utility to construct proper image URLs
+  // Utility to construct proper image URLs for database-stored files
   const getImageUrl = (filename) => {
     if (!filename) return null;
     
@@ -20,19 +20,16 @@ const PatientDashboard = () => {
     if (filename.startsWith('http')) return filename;
     
     // Get API base URL from environment or default
-    const baseUrl = import.meta.env.VITE_API_URL 
-      ? import.meta.env.VITE_API_URL.replace('/api', '') // Remove /api if present
-      : window.location.origin; // Use origin as fallback
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
     
-    console.log('[DEBUG] Base URL for images:', baseUrl);
-    
-    // If it includes the full path like /uploads/filename, add domain
-    if (filename.startsWith('/uploads/')) {
-      return `${baseUrl}${filename}`;
+    // For documents or images stored in the database
+    if (filename.match(/^[0-9a-fA-F]{24}$/)) {
+      // This looks like a MongoDB ObjectId - use the document endpoint
+      return `${baseUrl}/files/document/${filename}`;
     }
     
-    // Otherwise assume it's just a filename that needs the full path
-    return `${baseUrl}/uploads/${filename}`;
+    // For profile photos or other images, use the document endpoint
+    return `${baseUrl}/files/document/${filename}`;
   };
   
   const [activeTab, setActiveTab] = useState('overview');
@@ -68,6 +65,20 @@ const PatientDashboard = () => {
   
   // Add a new state for uploaded files
   const [uploadedFiles, setUploadedFiles] = useState([]);
+  
+  // Add a new state for medical documents after the other state variables
+  const [medicalDocuments, setMedicalDocuments] = useState([]);
+  const [documentUploadForm, setDocumentUploadForm] = useState({
+    file: null,
+    documentType: 'Other',
+    description: ''
+  });
+  const [selectedDocument, setSelectedDocument] = useState(null);
+  const [documentUpdateForm, setDocumentUpdateForm] = useState({
+    documentType: '',
+    description: ''
+  });
+  const [fileUploadLoading, setFileUploadLoading] = useState(false);
   
   // API base URL from environment variable or default
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -274,8 +285,8 @@ const PatientDashboard = () => {
           clearTimeout(timeoutId);
           
           if (uploadRes.data.success) {
-            // Just store the filename, not the full path
-            const filename = uploadRes.data.file.filename;
+            // Fix the property path - response contains document, not file
+            const filename = uploadRes.data.document.filename;
             profilePhotoUrl = filename;
           } else {
             throw new Error('File upload failed');
@@ -606,6 +617,204 @@ const PatientDashboard = () => {
     }
   };
   
+  // Add fetchMedicalDocuments function to useEffect
+  useEffect(() => {
+    // ... existing code ...
+    
+    // Add fetchMedicalDocuments to fetch all medical documents
+    const fetchMedicalDocuments = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        
+        const res = await axios.get(`${apiUrl}/files/my-documents`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
+        if (res.data.success) {
+          setMedicalDocuments(res.data.data);
+        }
+      } catch (err) {
+        console.error('Error fetching medical documents:', err);
+      }
+    };
+
+    // Call the function to fetch medical documents
+    if (activeTab === 'documents') {
+      fetchMedicalDocuments();
+    }
+    
+  }, [activeTab, apiUrl]);
+
+  // Add document upload handler
+  const handleDocumentUpload = async (e) => {
+    e.preventDefault();
+    setFileUploadLoading(true);
+    
+    try {
+      if (!documentUploadForm.file) {
+        alert('Please select a file to upload');
+        setFileUploadLoading(false);
+        return;
+      }
+      
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('file', documentUploadForm.file);
+      formData.append('documentType', documentUploadForm.documentType);
+      formData.append('description', documentUploadForm.description);
+      
+      const res = await axios.post(
+        `${apiUrl}/files/upload`,
+        formData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data'
+          }
+        }
+      );
+      
+      if (res.data.success) {
+        // Reset the form
+        setDocumentUploadForm({
+          file: null,
+          documentType: 'Other',
+          description: ''
+        });
+        
+        // Refresh the document list
+        const updatedDocs = await axios.get(
+          `${apiUrl}/files/my-documents`,
+          {
+            headers: { Authorization: `Bearer ${token}` }
+          }
+        );
+        
+        if (updatedDocs.data.success) {
+          setMedicalDocuments(updatedDocs.data.data);
+        }
+        
+        alert('Document uploaded successfully');
+      }
+    } catch (err) {
+      console.error('Error uploading document:', err);
+      alert('Failed to upload document. Please try again.');
+    } finally {
+      setFileUploadLoading(false);
+    }
+  };
+
+  // Add document file change handler
+  const handleDocumentFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setDocumentUploadForm({
+        ...documentUploadForm,
+        file: e.target.files[0]
+      });
+    }
+  };
+
+  // Add document update handler
+  const handleUpdateDocument = async (e) => {
+    e.preventDefault();
+    
+    try {
+      const token = localStorage.getItem('token');
+      
+      const res = await axios.put(
+        `${apiUrl}/files/document/${selectedDocument._id}`,
+        {
+          documentType: documentUpdateForm.documentType,
+          description: documentUpdateForm.description
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      
+      if (res.data.success) {
+        // Update the document in the local state
+        const updatedDocuments = medicalDocuments.map(doc => {
+          if (doc._id === selectedDocument._id) {
+            return { ...doc, ...res.data.data };
+          }
+          return doc;
+        });
+        
+        setMedicalDocuments(updatedDocuments);
+        setSelectedDocument(res.data.data);
+        alert('Document updated successfully');
+      }
+    } catch (err) {
+      console.error('Error updating document:', err);
+      alert('Failed to update document. Please try again.');
+    }
+  };
+
+  // Add document delete handler
+  const handleDeleteDocument = async (documentId) => {
+    try {
+      const token = localStorage.getItem('token');
+      
+      const confirmed = window.confirm('Are you sure you want to delete this document? This action cannot be undone.');
+      
+      if (!confirmed) return;
+      
+      const res = await axios.delete(
+        `${apiUrl}/files/document/${documentId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      
+      if (res.data.success) {
+        // Remove the document from the local state
+        setMedicalDocuments(medicalDocuments.filter(doc => doc._id !== documentId));
+        
+        if (selectedDocument && selectedDocument._id === documentId) {
+          setSelectedDocument(null);
+        }
+        
+        alert('Document deleted successfully');
+      }
+    } catch (err) {
+      console.error('Error deleting document:', err);
+      alert('Failed to delete document. Please try again.');
+    }
+  };
+
+  // Add document selection handler
+  const handleSelectDocument = (document) => {
+    setSelectedDocument(document);
+    setDocumentUpdateForm({
+      documentType: document.documentType,
+      description: document.description
+    });
+  };
+
+  // Add getter for document icon
+  const getDocumentIcon = (mimetype) => {
+    if (mimetype.includes('pdf')) {
+      return (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+    );
+    } else if (mimetype.includes('image')) {
+      return (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    );
+    } else {
+      return (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+      </svg>
+    );
+    }
+  };
+  
   if (loading && !patientInfo) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -670,6 +879,16 @@ const PatientDashboard = () => {
             onClick={() => setActiveTab('access')}
           >
             Access Management
+          </button>
+          <button
+            className={`py-3 px-1 border-b-2 ${
+              activeTab === 'documents'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent hover:border-gray-300'
+            }`}
+            onClick={() => setActiveTab('documents')}
+          >
+            Medical Documents
           </button>
         </nav>
       </div>
@@ -1877,6 +2096,192 @@ const PatientDashboard = () => {
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Medical Documents Tab */}
+      {activeTab === 'documents' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Document Upload Form */}
+          <div className="col-span-1 bg-white p-6 rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-4">Upload Medical Document</h2>
+            <form onSubmit={handleDocumentUpload}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Document Type</label>
+                <select
+                  value={documentUploadForm.documentType}
+                  onChange={(e) => setDocumentUploadForm({ ...documentUploadForm, documentType: e.target.value })}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  required
+                >
+                  <option value="Lab Report">Lab Report</option>
+                  <option value="Prescription">Prescription</option>
+                  <option value="Scan Report">Scan Report</option>
+                  <option value="Insurance">Insurance Document</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Description</label>
+                <input
+                  type="text"
+                  value={documentUploadForm.description}
+                  onChange={(e) => setDocumentUploadForm({ ...documentUploadForm, description: e.target.value })}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  placeholder="Document description"
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Document File</label>
+                <input
+                  type="file"
+                  onChange={handleDocumentFileChange}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  required
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Accepted formats: PDF, JPG, PNG. Maximum file size: 10MB
+                </p>
+              </div>
+              
+              <button
+                type="submit"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none disabled:bg-blue-300"
+                disabled={fileUploadLoading}
+              >
+                {fileUploadLoading ? (
+                  <span className="flex items-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Uploading...
+                  </span>
+                ) : "Upload Document"}
+              </button>
+            </form>
+            
+            {selectedDocument && (
+              <div className="mt-6 border-t pt-4">
+                <h3 className="text-md font-semibold mb-3">Edit Selected Document</h3>
+                <form onSubmit={handleUpdateDocument}>
+                  <div className="mb-3">
+                    <label className="block text-sm font-medium mb-1">Document Type</label>
+                    <select
+                      value={documentUpdateForm.documentType}
+                      onChange={(e) => setDocumentUpdateForm({ ...documentUpdateForm, documentType: e.target.value })}
+                      className="w-full p-2 border border-gray-300 rounded"
+                      required
+                    >
+                      <option value="Lab Report">Lab Report</option>
+                      <option value="Prescription">Prescription</option>
+                      <option value="Scan Report">Scan Report</option>
+                      <option value="Insurance">Insurance Document</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  
+                  <div className="mb-3">
+                    <label className="block text-sm font-medium mb-1">Description</label>
+                    <input
+                      type="text"
+                      value={documentUpdateForm.description}
+                      onChange={(e) => setDocumentUpdateForm({ ...documentUpdateForm, description: e.target.value })}
+                      className="w-full p-2 border border-gray-300 rounded"
+                      placeholder="Document description"
+                    />
+                  </div>
+                  
+                  <div className="flex space-x-2">
+                    <button
+                      type="submit"
+                      className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 focus:outline-none text-sm"
+                    >
+                      Update Details
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDocument(selectedDocument._id)}
+                      className="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 focus:outline-none text-sm"
+                    >
+                      Delete Document
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+          
+          {/* Document List */}
+          <div className="col-span-1 lg:col-span-2 bg-white p-6 rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-4">My Medical Documents</h2>
+            
+            {medicalDocuments.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {medicalDocuments.map(document => (
+                  <div 
+                    key={document._id} 
+                    className={`p-4 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors ${
+                      selectedDocument && selectedDocument._id === document._id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                    }`}
+                    onClick={() => handleSelectDocument(document)}
+                  >
+                    <div className="flex items-center mb-2">
+                      {getDocumentIcon(document.mimetype)}
+                      <div className="ml-3">
+                        <h3 className="font-medium truncate">{document.originalname}</h3>
+                        <p className="text-sm text-gray-500 truncate">{document.documentType}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="text-xs text-gray-500">
+                      <p className="mb-1 truncate">
+                        <span className="font-medium">Description:</span> {document.description || 'No description'}
+                      </p>
+                      <p className="mb-1">
+                        <span className="font-medium">Size:</span> {Math.round(document.size / 1024)} KB
+                      </p>
+                      <p>
+                        <span className="font-medium">Uploaded:</span> {new Date(document.uploadedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    
+                    <div className="mt-2 flex space-x-2">
+                      <a 
+                        href={getImageUrl(document._id)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:text-blue-800"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        View Document
+                      </a>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteDocument(document._id);
+                        }}
+                        className="text-sm text-red-600 hover:text-red-800"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="mt-2 text-gray-500">No medical documents uploaded yet</p>
+                <p className="text-sm text-gray-400">Upload your medical documents to keep track of your health records</p>
+              </div>
             )}
           </div>
         </div>

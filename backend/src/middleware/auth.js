@@ -8,39 +8,70 @@ const AccessRequest = require('../models/AccessRequest');
 
 // Protect routes
 exports.protect = async (req, res, next) => {
-  let token;
-
-  // Check for token in headers or cookies
-  if (
-    req.headers.authorization && 
-    req.headers.authorization.startsWith('Bearer')
-  ) {
-    // Set token from Bearer token
-    token = req.headers.authorization.split(' ')[1];
-  } else if (req.cookies && req.cookies.token) {
-    // Set token from cookie
-    token = req.cookies.token;
-  }
-
-  // Check if token exists
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: 'Not authorized to access this route'
-    });
-  }
-
   try {
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    let token;
 
-    // Set user to req.user
-    req.user = await User.findById(decoded.id);
-    next();
+    // Check for token in headers or cookies
+    if (
+      req.headers.authorization && 
+      req.headers.authorization.startsWith('Bearer')
+    ) {
+      // Set token from Bearer token
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies && req.cookies.token) {
+      // Set token from cookie
+      token = req.cookies.token;
+    }
+
+    // Check if token exists
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized to access this route'
+      });
+    }
+
+    try {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+
+      // Set user to req.user
+      const user = await User.findById(decoded.id);
+      
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+      
+      if (!user.active) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account is inactive or pending approval'
+        });
+      }
+      
+      // Set user and additional decoded info to req
+      req.user = user;
+      req.user.hospitalCode = decoded.hospitalCode || user.hospitalCode;
+      req.user.departmentCode = decoded.departmentCode || user.departmentCode;
+      
+      next();
+    } catch (error) {
+      console.error('Token verification error:', error);
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized to access this route',
+        error: error.message
+      });
+    }
   } catch (error) {
-    return res.status(401).json({
+    console.error('Auth middleware error:', error);
+    res.status(500).json({
       success: false,
-      message: 'Not authorized to access this route'
+      message: 'Server error in authentication',
+      error: error.message
     });
   }
 };

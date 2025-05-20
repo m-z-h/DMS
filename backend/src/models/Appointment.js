@@ -32,15 +32,17 @@ const appointmentSchema = new mongoose.Schema({
     default: 30, // Duration in minutes
   },
   reason: {
-    type: String
+    type: String,
+    default: 'Regular checkup'
   },
   status: {
     type: String,
-    enum: ['Scheduled', 'Confirmed', 'Cancelled', 'Completed'],
+    enum: ['Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'Missed'],
     default: 'Scheduled'
   },
   notes: {
-    type: String
+    type: String,
+    default: ''
   },
   createdAt: {
     type: Date,
@@ -58,6 +60,4 @@ appointmentSchema.pre('save', function(next) {
   next();
 });
 
-const Appointment = mongoose.model('Appointment', appointmentSchema);
-
-module.exports = Appointment; 
+module.exports = mongoose.model('Appointment', appointmentSchema); 

@@ -7,12 +7,26 @@ import Register from './pages/auth/Register';
 import AdminDashboard from './pages/dashboard/AdminDashboard';
 import DoctorDashboard from './pages/dashboard/DoctorDashboard';
 import PatientDashboard from './pages/dashboard/PatientDashboard';
+import ReceptionistDashboard from './pages/dashboard/ReceptionistDashboard';
 import NotFound from './pages/NotFound';
 
 function App() {
-  const { loading, role } = useAuth();
+  const { loading, role, user } = useAuth();
+  
+  // Add debug logs
+  console.log('App rendering with:', { 
+    loading, 
+    role,
+    isAuthenticated: !!user,
+    userDetails: user ? {
+      id: user.id,
+      username: user.username,
+      role: user.role
+    } : null
+  });
 
   if (loading) {
+    console.log('App is in loading state');
     // You could create a nice loading component here
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -30,16 +44,32 @@ function App() {
         <Route path="register" element={<Register />} />
 
         {/* Protected Routes */}
-        <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
-          <Route path="admin/dashboard" element={<AdminDashboard />} />
+        <Route 
+          element={<ProtectedRoute allowedRoles={['Admin']} />} 
+          path="admin/dashboard" 
+        >
+          <Route index element={<AdminDashboard />} />
         </Route>
 
-        <Route element={<ProtectedRoute allowedRoles={['Doctor']} />}>
-          <Route path="doctor/dashboard" element={<DoctorDashboard />} />
+        <Route 
+          element={<ProtectedRoute allowedRoles={['Doctor']} />}
+          path="doctor/dashboard"
+        >
+          <Route index element={<DoctorDashboard />} />
         </Route>
 
-        <Route element={<ProtectedRoute allowedRoles={['Patient']} />}>
-          <Route path="patient/dashboard" element={<PatientDashboard />} />
+        <Route 
+          element={<ProtectedRoute allowedRoles={['Patient']} />}
+          path="patient/dashboard"
+        >
+          <Route index element={<PatientDashboard />} />
+        </Route>
+
+        <Route 
+          element={<ProtectedRoute allowedRoles={['Receptionist']} />}
+          path="receptionist/dashboard"
+        >
+          <Route index element={<ReceptionistDashboard />} />
         </Route>
 
         {/* 404 - Not Found */}

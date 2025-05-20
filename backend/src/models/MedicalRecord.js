@@ -19,6 +19,11 @@ const medicalRecordSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  specialId: {
+    type: String,
+    index: true,
+    sparse: true
+  },
   recordType: {
     type: String,
     enum: ['general', 'lab', 'prescription', 'vitals', 'treatment', 'medication'],

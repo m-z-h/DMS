@@ -22,12 +22,12 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['Admin', 'Doctor', 'Patient'],
+    enum: ['Admin', 'Doctor', 'Patient', 'Receptionist'],
     required: true
   },
   hospitalCode: {
     type: String,
-    required: function() { return this.role === 'Doctor'; }
+    required: function() { return this.role === 'Doctor' || this.role === 'Receptionist'; }
   },
   departmentCode: {
     type: String,

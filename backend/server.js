@@ -20,6 +20,7 @@ const doctorRoutes = require('./src/routes/doctorRoutes');
 const patientRoutes = require('./src/routes/patientRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const pdfRoutes = require('./src/routes/pdfRoutes');
+const receptionistRoutes = require('./src/routes/receptionistRoutes');
 
 // Middleware
 const { logActivity } = require('./src/middleware/audit');
@@ -34,10 +35,12 @@ app.use(express.urlencoded({ extended: true }));
 // Cookie parser
 app.use(cookieParser());
 
-// Enable CORS
+// Enable CORS - properly configured for credentials
 app.use(
   cors({
     origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   })
 );
@@ -56,9 +59,7 @@ app.use('/api/doctor', doctorRoutes);
 app.use('/api/patient', patientRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/pdf', pdfRoutes);
-
-// Serve uploads statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api/receptionist', receptionistRoutes);
 
 // Serve static folder in production
 if (process.env.NODE_ENV === 'production') {

@@ -35,6 +35,11 @@ const Login = () => {
           navigate('/doctor/dashboard');
         } else if (result.role === 'Patient') {
           navigate('/patient/dashboard');
+        } else if (result.role === 'Receptionist') {
+          navigate('/receptionist/dashboard');
+        } else {
+          // Default fallback
+          navigate('/');
         }
       } else {
         setError(result.message || 'Login failed');

@@ -27,6 +27,10 @@ const patientSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+  oldAccessCode: {
+    type: String,
+    sparse: true
+  },
   profilePhoto: {
     type: String,
     default: null

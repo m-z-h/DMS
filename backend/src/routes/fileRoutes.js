@@ -1,25 +1,22 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const { uploadFile, getPatientFiles, deleteFile } = require('../controllers/fileController');
-const { protect } = require('../middleware/auth');
+const { uploadFile, getPatientFiles, deleteFile, updateDocument, getFileById } = require('../controllers/fileController');
+const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Configure multer storage
-const storage = multer.diskStorage({
-  destination: function(req, file, cb) {
-    cb(null, path.join(__dirname, '../../uploads'));
-  },
-  filename: function(req, file, cb) {
-    // Create a unique filename using timestamp + original name
-    cb(null, `${Date.now()}-${file.originalname}`);
-  }
-});
+// Ensure uploads directory exists
+const fs = require('fs');
+const uploadsDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  console.log('Creating uploads directory');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // File filter to only accept certain file types
 const fileFilter = (req, file, cb) => {
-  // Accept pdf, jpg, and png files
+  // Accept pdf, jpg, jpeg, and png files
   if (
     file.mimetype === 'application/pdf' ||
     file.mimetype === 'image/jpeg' ||
@@ -31,17 +28,20 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+// Use memory storage instead of disk storage for database storage
 const upload = multer({
-  storage: storage,
+  storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB max file size
+    fileSize: 10 * 1024 * 1024 // 10MB max file size
   },
   fileFilter: fileFilter
 });
 
-// Routes
-router.post('/upload', protect, upload.single('file'), uploadFile);
-router.get('/patient', protect, getPatientFiles);
-router.delete('/:filename', protect, deleteFile);
+// Medical document routes for patients
+router.post('/upload', protect, authorize('Patient'), upload.single('file'), uploadFile);
+router.get('/my-documents', protect, authorize('Patient'), getPatientFiles);
+router.get('/document/:documentId', protect, getFileById);
+router.put('/document/:documentId', protect, authorize('Patient'), updateDocument);
+router.delete('/document/:documentId', protect, authorize('Patient'), deleteFile);
 
 module.exports = router; 

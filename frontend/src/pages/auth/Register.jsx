@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import axios from 'axios';
 
 const Register = () => {
-  const [role, setRole] = useState('Patient');
+  const [role, setRole] = useState('Doctor');
   const [adminExists, setAdminExists] = useState(false);
   const [formData, setFormData] = useState({
     username: '',
@@ -13,18 +13,17 @@ const Register = () => {
     confirmPassword: '',
     fullName: '',
     contactNo: '',
-    dateOfBirth: '',
-    address: '',
     hospitalCode: '',
     departmentCode: '',
     licenseNo: '',
+    employeeId: '',
+    specialization: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [pdfData, setPdfData] = useState(null);
+  const [successMessage, setSuccessMessage] = useState('');
   const [hospitals, setHospitals] = useState([]);
   const [departments, setDepartments] = useState([]);
-  const [filteredDepartments, setFilteredDepartments] = useState([]);
   const [isHospitalSelected, setIsHospitalSelected] = useState(false);
   const [hospitalEmailDomain, setHospitalEmailDomain] = useState('');
   
@@ -149,6 +148,7 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMessage('');
     setIsLoading(true);
     
     // Password validation
@@ -174,9 +174,18 @@ const Register = () => {
         setIsLoading(false);
         return;
       }
-    } else if (role === 'Patient') {
-      if (!formData.dateOfBirth || !formData.contactNo || !formData.address) {
-        setError('Date of birth, contact number, and address are required for patients');
+    } else if (role === 'Receptionist') {
+      if (!formData.hospitalCode || !formData.contactNo) {
+        setError('Hospital and contact number are required for receptionists');
+        setIsLoading(false);
+        return;
+      }
+      
+      // Receptionist email validation (should be from hospital domain)
+      const emailDomain = formData.email.split('@')[1];
+      
+      if (!emailDomain || emailDomain.toLowerCase() !== hospitalEmailDomain.toLowerCase()) {
+        setError(`Receptionists must register with the hospital's email domain: @${hospitalEmailDomain}`);
         setIsLoading(false);
         return;
       }
@@ -189,77 +198,50 @@ const Register = () => {
         password: formData.password,
         role,
         fullName: formData.fullName,
+        contactNo: formData.contactNo,
+        hospitalCode: formData.hospitalCode,
         // Role-specific fields
         ...(role === 'Doctor' && {
-          hospitalCode: formData.hospitalCode,
           departmentCode: formData.departmentCode,
           licenseNo: formData.licenseNo,
-          contactNo: formData.contactNo
-        }),
-        ...(role === 'Patient' && {
-          dateOfBirth: formData.dateOfBirth,
-          contactNo: formData.contactNo,
-          address: formData.address
+          specialization: formData.specialization || ''
         })
       };
+
+      const response = await axios.post(`${apiUrl}/auth/register`, registrationData);
       
-      const result = await register(registrationData);
-      
-      if (result.success) {
-        if (role === 'Patient' && result.data.pdfData) {
-          // Store PDF data for download
-          setPdfData(result.data.pdfData);
-          // Don't navigate away - let user download their PDF first
-        } else {
-          // Redirect based on role
-          if (role === 'Admin') {
-            navigate('/admin/dashboard');
-          } else if (role === 'Doctor') {
-            navigate('/doctor/dashboard');
-          } else {
-            navigate('/patient/dashboard');
-          }
-        }
+      if (response.data.success) {
+        setSuccessMessage('Registration successful! Your account is pending approval by an administrator.');
+        // Reset form after successful registration
+        setFormData({
+          username: '',
+          email: '',
+          password: '',
+          confirmPassword: '',
+          fullName: '',
+          contactNo: '',
+          hospitalCode: '',
+          departmentCode: '',
+          licenseNo: '',
+          employeeId: '',
+          specialization: ''
+        });
       } else {
-        setError(result.message || 'Registration failed');
+        setError(response.data.message || 'Registration failed');
       }
     } catch (err) {
-      setError('An error occurred. Please try again.');
-      console.error(err);
+      console.error('Registration error:', err);
+      setError(err.response?.data?.message || 'An error occurred during registration');
     } finally {
       setIsLoading(false);
     }
   };
-  
-  const handleDownloadPDF = () => {
-    if (!pdfData) return;
-    
-    // Create a Blob from the base64 PDF data
-    const binaryData = atob(pdfData);
-    const array = new Uint8Array(binaryData.length);
-    for (let i = 0; i < binaryData.length; i++) {
-      array[i] = binaryData.charCodeAt(i);
-    }
-    const blob = new Blob([array], { type: 'application/pdf' });
-    
-    // Create download link
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', 'patient_credentials.pdf');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    // After download, redirect to dashboard
-    navigate('/patient/dashboard');
-  };
-  
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-lg mx-auto">
       <div className="bg-white p-8 rounded-lg shadow-md">
         <h2 className="text-2xl font-bold text-center mb-6 text-gray-800">
-          Register Account
+          Healthcare Professional Registration
         </h2>
         
         {error && (
@@ -268,317 +250,255 @@ const Register = () => {
           </div>
         )}
         
-        {pdfData ? (
-          <div className="text-center">
-            <div className="mb-6 p-4 bg-green-100 text-green-700 rounded-md">
-              <p className="font-bold">Registration Successful!</p>
-              <p className="mt-2">
-                Your account has been created. Please download your credentials PDF for important information.
-              </p>
-            </div>
-            
-            <button
-              onClick={handleDownloadPDF}
-              className="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 focus:outline-none"
-            >
-              Download Credentials PDF
-            </button>
+        {successMessage && (
+          <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-md text-sm">
+            {successMessage}
           </div>
-        ) : (
-          <form onSubmit={handleSubmit}>
-            {/* Role Selection */}
-            <div className="mb-6">
-              <label className="block text-gray-700 text-sm font-bold mb-2">
-                Register As
+        )}
+        
+        <form onSubmit={handleSubmit}>
+          {/* Role Selection */}
+          <div className="mb-4">
+            <label className="block text-gray-700 text-sm font-bold mb-2">
+              Register as:
+            </label>
+            <div className="flex space-x-4">
+              <label className="inline-flex items-center">
+                <input
+                  type="radio"
+                  value="Doctor"
+                  checked={role === 'Doctor'}
+                  onChange={handleRoleChange}
+                  className="form-radio h-4 w-4 text-blue-600"
+                />
+                <span className="ml-2 text-gray-700">Doctor</span>
               </label>
-              <div className="flex space-x-4">
-                {/* Only show Admin option if admin doesn't exist */}
-                {!adminExists && (
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      value="Admin"
-                      checked={role === 'Admin'}
-                      onChange={handleRoleChange}
-                      className="mr-2"
-                    />
-                    <span>Admin</span>
-                  </label>
-                )}
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    value="Doctor"
-                    checked={role === 'Doctor'}
-                    onChange={handleRoleChange}
-                    className="mr-2"
-                  />
-                  <span>Doctor</span>
-                </label>
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    value="Patient"
-                    checked={role === 'Patient'}
-                    onChange={handleRoleChange}
-                    className="mr-2"
-                  />
-                  <span>Patient</span>
-                </label>
-              </div>
+              <label className="inline-flex items-center">
+                <input
+                  type="radio"
+                  value="Receptionist"
+                  checked={role === 'Receptionist'}
+                  onChange={handleRoleChange}
+                  className="form-radio h-4 w-4 text-blue-600"
+                />
+                <span className="ml-2 text-gray-700">Receptionist</span>
+              </label>
             </div>
-            
-            {/* Common Fields */}
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="mb-4">
-                <label htmlFor="username" className="block text-gray-700 text-sm font-bold mb-2">
-                  Username
-                </label>
-                <input
-                  type="text"
-                  id="username"
-                  name="username"
-                  value={formData.username}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              
-              <div className="mb-4">
-                <label htmlFor="email" className="block text-gray-700 text-sm font-bold mb-2">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="mb-4">
-                <label htmlFor="password" className="block text-gray-700 text-sm font-bold mb-2">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  id="password"
-                  name="password"
-                  value={formData.password}
-                  onChange={handleChange}
-                  required
-                  minLength={6}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              
-              <div className="mb-4">
-                <label htmlFor="confirmPassword" className="block text-gray-700 text-sm font-bold mb-2">
-                  Confirm Password
-                </label>
-                <input
-                  type="password"
-                  id="confirmPassword"
-                  name="confirmPassword"
-                  value={formData.confirmPassword}
-                  onChange={handleChange}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+          </div>
+          
+          {/* Account Information */}
+          <h3 className="text-lg font-semibold text-gray-700 mb-3 border-b pb-2">Account Information</h3>
+          
+          <div className="mb-4">
+            <label htmlFor="username" className="block text-gray-700 text-sm font-bold mb-2">
+              Username
+            </label>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              value={formData.username}
+              onChange={handleChange}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <div className="mb-4">
+            <label htmlFor="email" className="block text-gray-700 text-sm font-bold mb-2">
+              Email Address
+              {hospitalEmailDomain && (
+                <span className="ml-1 text-blue-600 text-xs">
+                  (must be @{hospitalEmailDomain})
+                </span>
+              )}
+            </label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              value={formData.email}
+              onChange={handleChange}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder={hospitalEmailDomain ? `your.name@${hospitalEmailDomain}` : "your@email.com"}
+            />
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="mb-4">
+              <label htmlFor="password" className="block text-gray-700 text-sm font-bold mb-2">
+                Password
+              </label>
+              <input
+                type="password"
+                id="password"
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+                minLength="6"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
             
             <div className="mb-4">
-              <label htmlFor="fullName" className="block text-gray-700 text-sm font-bold mb-2">
-                Full Name
+              <label htmlFor="confirmPassword" className="block text-gray-700 text-sm font-bold mb-2">
+                Confirm Password
               </label>
               <input
-                type="text"
-                id="fullName"
-                name="fullName"
-                value={formData.fullName}
+                type="password"
+                id="confirmPassword"
+                name="confirmPassword"
+                value={formData.confirmPassword}
                 onChange={handleChange}
                 required
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            
-            {/* Doctor-specific fields */}
-            {role === 'Doctor' && (
-              <>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="mb-4">
-                    <label htmlFor="hospitalCode" className="block text-gray-700 text-sm font-bold mb-2">
-                      Hospital
-                    </label>
-                    <select
-                      id="hospitalCode"
-                      name="hospitalCode"
-                      value={formData.hospitalCode}
-                      onChange={handleChange}
-                      required
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">Select Hospital</option>
-                      {hospitals.map(hospital => (
-                        <option key={hospital.code} value={hospital.code}>
-                          {hospital.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <label htmlFor="departmentCode" className="block text-gray-700 text-sm font-bold mb-2">
-                      Department
-                    </label>
-                    <select
-                      id="departmentCode"
-                      name="departmentCode"
-                      value={formData.departmentCode}
-                      onChange={handleChange}
-                      required
-                      disabled={!isHospitalSelected}
-                      className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${!isHospitalSelected ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                    >
-                      <option value="">Select Department</option>
-                      {departments.map(dept => (
-                        <option key={dept.code} value={dept.code}>
-                          {dept.name}
-                        </option>
-                      ))}
-                    </select>
-                    {!isHospitalSelected && (
-                      <p className="mt-1 text-xs text-gray-500">
-                        Select a hospital first
-                      </p>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="mb-4">
-                    <label htmlFor="licenseNo" className="block text-gray-700 text-sm font-bold mb-2">
-                      License Number
-                    </label>
-                    <input
-                      type="text"
-                      id="licenseNo"
-                      name="licenseNo"
-                      value={formData.licenseNo}
-                      onChange={handleChange}
-                      required
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  
-                  <div className="mb-4">
-                    <label htmlFor="contactNo" className="block text-gray-700 text-sm font-bold mb-2">
-                      Contact Number
-                    </label>
-                    <input
-                      type="tel"
-                      id="contactNo"
-                      name="contactNo"
-                      value={formData.contactNo}
-                      onChange={handleChange}
-                      required
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-                
-                <div className="mb-4 p-3 bg-yellow-100 text-yellow-700 rounded-md text-sm">
-                  <p className="font-semibold">Note:</p>
-                  {hospitalEmailDomain ? (
-                    <p>Doctors must register with the hospital's email domain: @{hospitalEmailDomain}</p>
-                  ) : (
-                    <p>Please select a hospital to see the required email domain for registration.</p>
-                  )}
-                </div>
-              </>
-            )}
-            
-            {/* Patient-specific fields */}
-            {role === 'Patient' && (
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="mb-4">
-                  <label htmlFor="dateOfBirth" className="block text-gray-700 text-sm font-bold mb-2">
-                    Date of Birth
-                  </label>
-                  <input
-                    type="date"
-                    id="dateOfBirth"
-                    name="dateOfBirth"
-                    value={formData.dateOfBirth}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                
-                <div className="mb-4">
-                  <label htmlFor="contactNo" className="block text-gray-700 text-sm font-bold mb-2">
-                    Contact Number
-                  </label>
-                  <input
-                    type="tel"
-                    id="contactNo"
-                    name="contactNo"
-                    value={formData.contactNo}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                
-                <div className="mb-4 md:col-span-2">
-                  <label htmlFor="address" className="block text-gray-700 text-sm font-bold mb-2">
-                    Address
-                  </label>
-                  <textarea
-                    id="address"
-                    name="address"
-                    value={formData.address}
-                    onChange={handleChange}
-                    required
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  ></textarea>
-                </div>
-                
-                <div className="mb-4 md:col-span-2 p-3 bg-yellow-100 text-yellow-700 rounded-md text-sm">
-                  <p className="font-semibold">Note:</p>
-                  <p>After registration, you will receive a PDF with your login credentials and a unique access code. 
-                     Keep this information secure - doctors will need your access code to view your medical records.</p>
-                </div>
-              </div>
-            )}
-            
-            <button
-              type="submit"
-              disabled={isLoading}
-              className={`w-full mt-4 bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 ${
-                isLoading ? 'opacity-70 cursor-not-allowed' : ''
-              }`}
+          </div>
+          
+          {/* Personal Information */}
+          <h3 className="text-lg font-semibold text-gray-700 mb-3 border-b pb-2 mt-6">Personal Information</h3>
+          
+          <div className="mb-4">
+            <label htmlFor="fullName" className="block text-gray-700 text-sm font-bold mb-2">
+              Full Name
+            </label>
+            <input
+              type="text"
+              id="fullName"
+              name="fullName"
+              value={formData.fullName}
+              onChange={handleChange}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <div className="mb-4">
+            <label htmlFor="contactNo" className="block text-gray-700 text-sm font-bold mb-2">
+              Contact Number
+            </label>
+            <input
+              type="tel"
+              id="contactNo"
+              name="contactNo"
+              value={formData.contactNo}
+              onChange={handleChange}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          {/* Hospital and Department */}
+          <h3 className="text-lg font-semibold text-gray-700 mb-3 border-b pb-2 mt-6">Professional Information</h3>
+          
+          <div className="mb-4">
+            <label htmlFor="hospitalCode" className="block text-gray-700 text-sm font-bold mb-2">
+              Hospital
+            </label>
+            <select
+              id="hospitalCode"
+              name="hospitalCode"
+              value={formData.hospitalCode}
+              onChange={handleChange}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              {isLoading ? 'Processing...' : 'Register'}
-            </button>
-          </form>
-        )}
+              <option value="">Select Hospital</option>
+              {hospitals.map(hospital => (
+                <option key={hospital.code} value={hospital.code}>
+                  {hospital.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Doctor-specific fields */}
+          {role === 'Doctor' && (
+            <>
+              <div className="mb-4">
+                <label htmlFor="departmentCode" className="block text-gray-700 text-sm font-bold mb-2">
+                  Department
+                </label>
+                <select
+                  id="departmentCode"
+                  name="departmentCode"
+                  value={formData.departmentCode}
+                  onChange={handleChange}
+                  required
+                  disabled={!isHospitalSelected}
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${!isHospitalSelected ? 'bg-gray-100' : ''}`}
+                >
+                  <option value="">Select Department</option>
+                  {departments.map(department => (
+                    <option key={department.code} value={department.code}>
+                      {department.name}
+                    </option>
+                  ))}
+                </select>
+                {!isHospitalSelected && (
+                  <p className="text-gray-500 text-xs mt-1">Select a hospital first</p>
+                )}
+              </div>
+              
+              <div className="mb-4">
+                <label htmlFor="licenseNo" className="block text-gray-700 text-sm font-bold mb-2">
+                  Medical License Number
+                </label>
+                <input
+                  type="text"
+                  id="licenseNo"
+                  name="licenseNo"
+                  value={formData.licenseNo}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label htmlFor="specialization" className="block text-gray-700 text-sm font-bold mb-2">
+                  Specialization (Optional)
+                </label>
+                <input
+                  type="text"
+                  id="specialization"
+                  name="specialization"
+                  value={formData.specialization}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </>
+          )}
+          
+          {/* Receptionist-specific fields */}
+          {role === 'Receptionist' && (
+            <></>
+          )}
+          
+          <button
+            type="submit"
+            disabled={isLoading}
+            className={`w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              isLoading ? 'opacity-70 cursor-not-allowed' : ''
+            }`}
+          >
+            {isLoading ? 'Registering...' : 'Register'}
+          </button>
+        </form>
         
         <div className="mt-6 text-center">
           <p className="text-gray-600 text-sm">
             Already have an account?{' '}
             <Link to="/login" className="text-blue-600 hover:underline">
-              Sign In
+              Login
             </Link>
+          </p>
+          <p className="text-gray-500 text-xs mt-2">
+            Note: Patients can only be registered by hospital receptionists
           </p>
         </div>
       </div>

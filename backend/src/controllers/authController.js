@@ -8,10 +8,25 @@ const crypto = require('crypto');
 const { generatePDF } = require('../utils/pdfGenerator');
 const mongoose = require('mongoose');
 const Department = require('../models/Department');
+const Receptionist = require('../models/Receptionist');
 
 // Helper function to generate access code
 const generateAccessCode = () => {
   return crypto.randomBytes(4).toString('hex');
+};
+
+// Helper function to generate JWT token
+const generateToken = (userId, role, hospitalCode, departmentCode) => {
+  return jwt.sign(
+    { 
+      id: userId,
+      role: role,
+      hospitalCode: hospitalCode || '',
+      departmentCode: departmentCode || ''
+    },
+    process.env.JWT_SECRET || 'your_jwt_secret',
+    { expiresIn: process.env.JWT_EXPIRE || '24h' }
+  );
 };
 
 // Check if admin exists
@@ -31,127 +46,150 @@ exports.checkAdminExists = async (req, res) => {
   }
 };
 
-// Register user - Admin, Doctor, Patient
+/**
+ * Register a new doctor or receptionist
+ * @route POST /api/auth/register
+ */
 exports.register = async (req, res) => {
   try {
-    const { username, email, password, role, fullName, hospitalCode, departmentCode, 
-            dateOfBirth, contactNo, address, licenseNo } = req.body;
+    const { username, email, password, role, hospitalCode, departmentCode, fullName, contactNo, licenseNo, specialization, employeeId } = req.body;
 
-    // Check if username or email already exists
-    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
-    if (existingUser) {
+    // Validate required fields
+    if (!username || !email || !password || !role || !hospitalCode || !fullName || !contactNo) {
       return res.status(400).json({ 
-        success: false, 
-        message: 'Username or Email already in use' 
+        success: false,
+        message: 'Please provide all required fields'
       });
     }
 
-    // Special handling for Admin registration - allow only one admin
-    if (role === 'Admin') {
-      const adminExists = await User.findOne({ role: 'Admin' });
-      if (adminExists) {
-        return res.status(403).json({
+    // Check if role is valid (only doctor and receptionist can self-register)
+    if (role !== 'Doctor' && role !== 'Receptionist') {
+      return res.status(403).json({
+        success: false,
+        message: 'Self-registration is only allowed for doctors and receptionists'
+      });
+    }
+
+    // Check if hospital exists
+    const hospital = await Hospital.findOne({ code: hospitalCode, isActive: true });
+    if (!hospital) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid hospital code'
+      });
+    }
+
+    // For doctors, validate department
+    if (role === 'Doctor' && !departmentCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Department code is required for doctors'
+      });
+    }
+
+    if (role === 'Doctor') {
+      const department = await Department.findOne({ 
+        code: departmentCode, 
+        hospitalCode, 
+        isActive: true 
+      });
+      
+      if (!department) {
+        return res.status(400).json({
           success: false,
-          message: 'Admin account already exists. Only one admin is allowed in the system.'
+          message: 'Invalid department code for this hospital'
+        });
+      }
+
+      if (!licenseNo) {
+        return res.status(400).json({
+          success: false,
+          message: 'License number is required for doctors'
         });
       }
     }
 
-    // For doctors, validate email domain against hospital domains
-    if (role === 'Doctor') {
-      // Verify required doctor fields
-      if (!hospitalCode || !departmentCode || !licenseNo || !contactNo) {
-        return res.status(400).json({
-          success: false,
-          message: 'Missing required doctor information'
-        });
-      }
+    // Employee ID is now optional for receptionists
 
-      // Get hospital by code to verify email domain
-      const hospital = await Hospital.findOne({ code: hospitalCode });
-      if (!hospital) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid hospital code'
-        });
-      }
-
-      // Extract email domain and verify against hospital domain
-      const emailDomain = email.split('@')[1];
-      if (!emailDomain || emailDomain.toLowerCase() !== hospital.emailDomain.toLowerCase()) {
-        return res.status(400).json({
-          success: false,
-          message: `Doctor registration requires an email with the hospital's domain: ${hospital.emailDomain}`
-        });
-      }
+    // Check if user already exists
+    const existingUser = await User.findOne({ 
+      $or: [{ email }, { username }]
+    });
+    
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or username already exists'
+      });
     }
 
     // Create user
-    const user = await User.create({
+    const newUser = new User({
       username,
       email,
       password,
       role,
-      hospitalCode: role === 'Doctor' ? hospitalCode : undefined,
-      departmentCode: role === 'Doctor' ? departmentCode : undefined
+      hospitalCode,
+      departmentCode: role === 'Doctor' ? departmentCode : undefined,
+      active: false // Users start as inactive until approved
     });
 
-    // Create role-specific profile
+    await newUser.save();
+
+    // Create profile based on role
     if (role === 'Doctor') {
-      await Doctor.create({
-        userId: user._id,
+      const newDoctor = new Doctor({
+        userId: newUser._id,
         fullName,
         hospitalCode,
         departmentCode,
         contactNo,
-        licenseNo
+        licenseNo,
+        specialization: specialization || ''
       });
-    } else if (role === 'Patient') {
-      // Generate access code for patient
-      const accessCode = generateAccessCode();
-      
-      await Patient.create({
-        userId: user._id,
+
+      await newDoctor.save();
+    } else if (role === 'Receptionist') {
+      const newReceptionist = new Receptionist({
+        userId: newUser._id,
         fullName,
-        dateOfBirth,
+        hospitalCode,
         contactNo,
-        address,
-        accessCode
+        employeeId: employeeId || undefined // Make employeeId optional
       });
-      
-      // Generate PDF with patient credentials
-      const pdfBuffer = await generatePDF({
-        patientName: fullName,
-        patientId: user._id,
-        username,
-        password, // This is the plaintext password before hashing
-        accessCode
-      });
-      
-      // Return both token and PDF data
-      return sendTokenResponse(user, 201, res, { 
-        pdfData: pdfBuffer.toString('base64'),
-        accessCode 
-      });
+
+      await newReceptionist.save();
     }
 
-    // Send token response
-    sendTokenResponse(user, 201, res);
+    return res.status(201).json({
+      success: true,
+      message: 'Registration successful. Account pending approval by administrator.',
+      data: {
+        username: newUser.username,
+        email: newUser.email,
+        role: newUser.role,
+        id: newUser._id
+      }
+    });
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server Error',
+      message: 'Server error during registration',
       error: error.message
     });
   }
 };
 
-// Login user
+/**
+ * Login for all users (doctors, receptionists, patients)
+ * @route POST /api/auth/login
+ */
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate email & password
+    // Validate input
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -159,15 +197,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database service unavailable. Please try again later.'
-      });
-    }
-
-    // Check for user
+    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(401).json({
@@ -176,7 +206,15 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Check if password matches
+    // Check if account is active
+    if (!user.active) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is pending approval or has been deactivated'
+      });
+    }
+
+    // Verify password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -185,49 +223,152 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Get additional profile info if needed
-    let additionalData = {};
-    if (user.role === 'Patient') {
-      const patient = await Patient.findOne({ userId: user._id });
-      if (patient) {
-        additionalData.accessCode = patient.accessCode;
+    // Get user profile information based on role
+    let profileData = {};
+    
+    if (user.role === 'Doctor') {
+      const doctor = await Doctor.findOne({ userId: user._id });
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor profile not found'
+        });
       }
+      
+      profileData = {
+        fullName: doctor.fullName,
+        hospitalCode: doctor.hospitalCode,
+        departmentCode: doctor.departmentCode,
+        contactNo: doctor.contactNo,
+        licenseNo: doctor.licenseNo,
+        specialization: doctor.specialization
+      };
+    } else if (user.role === 'Receptionist') {
+      const receptionist = await Receptionist.findOne({ userId: user._id });
+      if (!receptionist) {
+        return res.status(404).json({
+          success: false,
+          message: 'Receptionist profile not found'
+        });
+      }
+      
+      profileData = {
+        fullName: receptionist.fullName,
+        hospitalCode: receptionist.hospitalCode,
+        contactNo: receptionist.contactNo,
+        employeeId: receptionist.employeeId
+      };
+    } else if (user.role === 'Patient') {
+      const patient = await Patient.findOne({ userId: user._id });
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient profile not found'
+        });
+      }
+      
+      profileData = {
+        fullName: patient.fullName,
+        accessCode: patient.accessCode,
+        contactNo: patient.contactNo
+      };
     }
 
-    sendTokenResponse(user, 200, res, additionalData);
+    // Generate JWT token with role and other important information
+    const token = generateToken(
+      user._id, 
+      user.role, 
+      user.hospitalCode || profileData.hospitalCode, 
+      user.departmentCode || profileData.departmentCode
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        ...profileData
+      }
+    });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server Error',
+      message: 'Server error during login',
       error: error.message
     });
   }
 };
 
-// Get current logged in user
+/**
+ * Get current logged in user
+ * @route GET /api/auth/me
+ */
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-
-    let profile = null;
-    if (user.role === 'Doctor') {
-      profile = await Doctor.findOne({ userId: user._id });
-    } else if (user.role === 'Patient') {
-      profile = await Patient.findOne({ userId: user._id });
+    const user = await User.findById(req.user.id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
     }
 
-    res.status(200).json({
+    // Get profile data based on role
+    let profileData = {};
+    
+    if (user.role === 'Doctor') {
+      const doctor = await Doctor.findOne({ userId: user._id });
+      if (doctor) {
+        profileData = {
+          fullName: doctor.fullName,
+          hospitalCode: doctor.hospitalCode,
+          departmentCode: doctor.departmentCode,
+          contactNo: doctor.contactNo,
+          specialization: doctor.specialization
+        };
+      }
+    } else if (user.role === 'Receptionist') {
+      const receptionist = await Receptionist.findOne({ userId: user._id });
+      if (receptionist) {
+        profileData = {
+          fullName: receptionist.fullName,
+          hospitalCode: receptionist.hospitalCode,
+          contactNo: receptionist.contactNo,
+          employeeId: receptionist.employeeId
+        };
+      }
+    } else if (user.role === 'Patient') {
+      const patient = await Patient.findOne({ userId: user._id });
+      if (patient) {
+        profileData = {
+          fullName: patient.fullName,
+          accessCode: patient.accessCode,
+          contactNo: patient.contactNo
+        };
+      }
+    }
+
+    return res.status(200).json({
       success: true,
       data: {
-        user,
-        profile
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        ...profileData
       }
     });
   } catch (error) {
+    console.error('Get profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server Error',
+      message: 'Server error',
       error: error.message
     });
   }

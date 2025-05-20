@@ -271,27 +271,60 @@ const DoctorDashboard = () => {
   
   const handleUpdateAppointment = async (id, status) => {
     try {
+      console.log(`Updating appointment ${id} to status: ${status}`);
+      
+      // Get the token from localStorage
       const token = localStorage.getItem('token');
       
-      await axios.put(
+      // Find the appointment in our local state to get additional info if needed
+      const appointment = appointments.find(appt => appt._id === id);
+      if (!appointment) {
+        throw new Error('Appointment not found in local state');
+      }
+      
+      // Send the status update with additional data to ensure validation passes
+      const response = await axios.put(
         `${apiUrl}/doctor/appointments/${id}/status`,
-        { status },
+        { 
+          status,
+          notes: appointment.notes || '' // Include existing notes if any
+        },
         {
           headers: { Authorization: `Bearer ${token}` }
         }
       );
       
-      // Update local state
-      setAppointments(appointments.map(appointment =>
-        appointment._id === id
-          ? { ...appointment, status }
-          : appointment
-      ));
+      console.log('Update response:', response.data);
       
-      alert('Appointment status updated successfully');
+      if (response.data.success) {
+        // Update local state with the response data
+        setAppointments(appointments.map(appt =>
+          appt._id === id
+            ? { ...appt, ...response.data.data }
+            : appt
+        ));
+        
+        alert(`Appointment status updated to "${status}" successfully`);
+      }
     } catch (err) {
       console.error('Error updating appointment:', err);
-      alert('Failed to update appointment');
+      
+      // Extract detailed error message from response if available
+      let errorMessage = 'Failed to update appointment status';
+      
+      if (err.response) {
+        // Server responded with an error
+        console.log('Error response data:', err.response.data);
+        errorMessage = err.response.data?.message || `Server error: ${err.response.status}`;
+      } else if (err.request) {
+        // Request was made but no response received
+        errorMessage = 'No response from server. Please check your connection.';
+      } else {
+        // Error in setting up the request
+        errorMessage = err.message || 'Unknown error occurred';
+      }
+      
+      alert(`Error: ${errorMessage}`);
     }
   };
   
@@ -1411,7 +1444,51 @@ const DoctorDashboard = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Update Profile Form */}
           <div className="bg-white p-6 rounded-lg shadow">
-                        <h2 className="text-lg font-semibold mb-4">Update Your Profile</h2>            <form onSubmit={handleUpdateProfile}>              {/* Profile Photo Upload */}              <div className="mb-6 flex flex-col items-center">                <div className="w-32 h-32 rounded-full overflow-hidden border-2 border-gray-300 mb-3">                  {profileUpdateForm.profilePhoto ? (                    <img                       src={getImageUrl(profileUpdateForm.profilePhoto)}                      alt="Profile"                       className="w-full h-full object-cover"                      onError={(e) => {                        e.target.onerror = null;                        e.target.src = "https://via.placeholder.com/150?text=Profile";                        console.error("Failed to load profile photo");                      }}                    />                  ) : (                    <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />                      </svg>                    </div>                  )}                </div>                <label className="cursor-pointer bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200">                  <input                    type="file"                    accept="image/*"                    className="hidden"                    onChange={handleProfilePhotoChange}                  />                  Change Photo                </label>              </div>                            <div className="mb-4">                <label className="block text-sm font-medium mb-1">Full Name</label>                <input                  type="text"                  name="fullName"                  value={profileUpdateForm.fullName}                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}                  className="w-full p-2 border border-gray-300 rounded"                  required                />              </div>
+            <h2 className="text-lg font-semibold mb-4">Update Your Profile</h2>
+            <form onSubmit={handleUpdateProfile}>
+              {/* Profile Photo Upload */}
+              <div className="mb-6 flex flex-col items-center">
+                <div className="w-32 h-32 rounded-full overflow-hidden border-2 border-gray-300 mb-3">
+                  {profileUpdateForm.profilePhoto ? (
+                    <img
+                      src={getImageUrl(profileUpdateForm.profilePhoto)}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = "https://via.placeholder.com/150?text=Profile";
+                        console.error("Failed to load profile photo");
+                      }}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-400">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <label className="cursor-pointer bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleProfilePhotoChange}
+                  />
+                  Change Photo
+                </label>
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Full Name</label>
+                <input
+                  type="text"
+                  name="fullName"
+                  value={profileUpdateForm.fullName}
+                  onChange={(e) => handleInputChange(e, setProfileUpdateForm, profileUpdateForm)}
+                  className="w-full p-2 border border-gray-300 rounded"
+                  required
+                />
+              </div>
               
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Specialization</label>

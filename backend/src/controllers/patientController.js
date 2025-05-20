@@ -7,6 +7,7 @@ const Appointment = require('../models/Appointment');
 const AccessGrant = require('../models/AccessGrant');
 const AccessRequest = require('../models/AccessRequest');
 const { generatePDF } = require('../utils/pdfGenerator');
+const DoctorPatientHistory = require('../models/DoctorPatientHistory');
 
 // Get all medical records for the logged-in patient
 exports.getMyRecords = async (req, res) => {
@@ -356,24 +357,55 @@ exports.grantDoctorAccess = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + (expiryDays || 30));
 
+    // Use readWrite as default if not specified
+    const grantAccessLevel = accessLevel || 'readWrite';
+
     if (grant) {
       // Update existing grant
-      grant.accessLevel = accessLevel || grant.accessLevel;
+      grant.accessLevel = grantAccessLevel;
       grant.expiresAt = expiresAt;
+      grant.isActive = true; // Ensure grant is active
       await grant.save();
+
+      console.log(`Updated doctor access with level: ${grant.accessLevel}`);
     } else {
       // Create new grant
       grant = await AccessGrant.create({
         patientId: patient._id,
         doctorId,
-        accessLevel: accessLevel || 'read',
-        expiresAt
+        accessLevel: grantAccessLevel,
+        expiresAt,
+        isActive: true
       });
+      
+      console.log(`Created new doctor access with level: ${grant.accessLevel}`);
+    }
+
+    // Create or update history record
+    let historyRecord = await DoctorPatientHistory.findOne({
+      patientId: patient._id,
+      doctorId
+    });
+
+    if (!historyRecord) {
+      historyRecord = new DoctorPatientHistory({
+        patientId: patient._id,
+        doctorId,
+        fullName: patient.fullName,
+        hospitalCode: patient.hospitalCode || 'Unknown',
+        departmentCode: patient.departmentCode || 'Unknown',
+        hasActiveAccess: true
+      });
+      await historyRecord.save();
+    } else {
+      historyRecord.hasActiveAccess = true;
+      historyRecord.accessRevokedAt = null; // Clear revocation time if any
+      await historyRecord.save();
     }
 
     res.status(200).json({
       success: true,
-      message: 'Access granted successfully',
+      message: `Access granted successfully with ${grantAccessLevel} permissions`,
       data: grant
     });
   } catch (error) {
@@ -414,11 +446,32 @@ exports.revokeDoctorAccess = async (req, res) => {
       });
     }
 
+    // Save basic patient info to doctor-patient history
+    let historyRecord = await DoctorPatientHistory.findOne({
+      patientId: patient._id,
+      doctorId
+    });
+
+    if (!historyRecord) {
+      // Create a new history record if one doesn't exist
+      historyRecord = new DoctorPatientHistory({
+        patientId: patient._id,
+        doctorId,
+        fullName: patient.fullName,
+        hospitalCode: patient.hospitalCode || 'Unknown',
+        departmentCode: patient.departmentCode || 'Unknown',
+      });
+    }
+
     // Check current access level
     if (grant.accessLevel === 'readWrite') {
       // If currently has readWrite access, downgrade to read-only
       grant.accessLevel = 'read'; // Downgrade to read-only
       await grant.save();
+      
+      // Update history record but keep active access flag true
+      historyRecord.hasActiveAccess = true;
+      await historyRecord.save();
       
       return res.status(200).json({
         success: true,
@@ -428,6 +481,11 @@ exports.revokeDoctorAccess = async (req, res) => {
       // If already at read-only, completely revoke by setting isActive to false
       grant.isActive = false;
       await grant.save();
+      
+      // Update history record to show access has been revoked
+      historyRecord.hasActiveAccess = false;
+      historyRecord.accessRevokedAt = new Date();
+      await historyRecord.save();
       
       return res.status(200).json({
         success: true,
@@ -578,25 +636,53 @@ exports.respondToAccessRequest = async (req, res) => {
         doctorId: request.doctorId
       });
       
-      // Create or update the grant
+      // Create or update the grant - always use readWrite by default unless explicitly set to read-only
+      const accessLevel = request.accessLevel || 'readWrite';
+      
+      // Reset expiration to 30 days from now
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 30);
+      
       if (grant) {
         // Update existing grant
-        grant.accessLevel = request.accessLevel;
-        // Reset expiration to 30 days from now
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 30);
+        grant.accessLevel = accessLevel;
         grant.expiresAt = expiresAt;
         grant.isActive = true;
         await grant.save();
+        console.log(`Updated access grant with level: ${accessLevel}`);
       } else {
         // Create new grant
-        await AccessGrant.create({
+        grant = await AccessGrant.create({
           patientId: patient._id,
           doctorId: request.doctorId,
-          accessLevel: request.accessLevel,
-          // Default expiry is 30 days from now
-          grantedAt: Date.now()
+          accessLevel: accessLevel,
+          expiresAt: expiresAt,
+          grantedAt: Date.now(),
+          isActive: true
         });
+        console.log(`Created new access grant with level: ${accessLevel}`);
+      }
+      
+      // Update or create history record
+      let historyRecord = await DoctorPatientHistory.findOne({
+        patientId: patient._id,
+        doctorId: request.doctorId
+      });
+
+      if (!historyRecord) {
+        historyRecord = new DoctorPatientHistory({
+          patientId: patient._id,
+          doctorId: request.doctorId,
+          fullName: patient.fullName,
+          hospitalCode: patient.hospitalCode || 'Unknown',
+          departmentCode: patient.departmentCode || 'Unknown',
+          hasActiveAccess: true
+        });
+        await historyRecord.save();
+      } else {
+        historyRecord.hasActiveAccess = true;
+        historyRecord.accessRevokedAt = null; // Clear revocation time
+        await historyRecord.save();
       }
     }
     

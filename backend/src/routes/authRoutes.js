@@ -14,9 +14,9 @@ const router = express.Router();
 // Public routes
 router.post('/register', register);
 router.post('/login', login);
-router.get('/check-admin-exists', checkAdminExists);
 router.get('/hospitals', getHospitals);
 router.get('/departments', getDepartments);
+router.get('/check-admin-exists', checkAdminExists);
 
 // Protected routes
 router.get('/me', protect, getMe);

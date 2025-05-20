@@ -12,7 +12,8 @@ const {
   requestPatientAccess,
   getMyAccessRequests,
   getProfile,
-  updateProfile
+  updateProfile,
+  getMyHistoricalPatients
 } = require('../controllers/doctorController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -35,6 +36,8 @@ router.put('/profile', updateProfile);
 // Patient routes
 console.log('GET /patients');
 router.get('/patients', getMyPatients);
+console.log('GET /patients/historical');
+router.get('/patients/historical', getMyHistoricalPatients);
 console.log('GET /patients/:patientId/records');
 router.get('/patients/:patientId/records', getPatientRecords);
 

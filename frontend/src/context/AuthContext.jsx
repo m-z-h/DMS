@@ -39,12 +39,13 @@ export const AuthProvider = ({ children }) => {
         const res = await axios.get(`${apiUrl}/auth/me`, {
           headers: {
             Authorization: `Bearer ${storedToken}`
-          }
+          },
+          withCredentials: true
         });
         
         if (res.data.success) {
-          setUser(res.data.data.user);
-          setRole(res.data.data.user.role);
+          setUser(res.data.data);
+          setRole(res.data.data.role);
         }
       } catch (err) {
         console.error('Authentication error:', err);
@@ -62,7 +63,9 @@ export const AuthProvider = ({ children }) => {
   const register = async (formData) => {
     try {
       setError(null);
-      const res = await axios.post(`${apiUrl}/auth/register`, formData);
+      const res = await axios.post(`${apiUrl}/auth/register`, formData, {
+        withCredentials: true
+      });
       
       if (res.data.success) {
         localStorage.setItem('token', res.data.token);
@@ -89,39 +92,54 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       setError(null);
-      const res = await axios.post(`${apiUrl}/auth/login`, { email, password });
+      const res = await axios.post(`${apiUrl}/auth/login`, { email, password }, {
+        withCredentials: true
+      });
       
       if (res.data.success) {
         localStorage.setItem('token', res.data.token);
         setToken(res.data.token);
         
+        // Store user data from the login response
+        if (res.data.user) {
+          setUser(res.data.user);
+          setRole(res.data.user.role);
+        }
+        
+        // Fetch user data after login to ensure we have latest info
         try {
-          // Fetch user data after login
           const userRes = await axios.get(`${apiUrl}/auth/me`, {
             headers: {
               Authorization: `Bearer ${res.data.token}`
-            }
+            },
+            withCredentials: true
           });
           
-          if (userRes.data.success) {
-            setUser(userRes.data.data.user);
-            setRole(userRes.data.data.user.role);
+          if (userRes.data.success && userRes.data.data) {
+            setUser(userRes.data.data);
+            setRole(userRes.data.data.role);
           }
         } catch (userError) {
           console.error('Error fetching user details:', userError);
           // Continue with login even if user details fetch fails
         }
         
+        // Return success with role information from where we have it
         return {
           success: true,
-          role: res.data.role,
+          role: res.data.user?.role || role,
           message: 'Login successful'
         };
       }
+      
+      return {
+        success: false,
+        message: res.data.message || 'Login failed'
+      };
     } catch (err) {
       console.error('Login error:', err);
       const errorMessage = err.response?.data?.message || 
-                          (err.message === 'Network Error' ? 'Cannot connect to server' : 'Login failed');
+                         (err.message === 'Network Error' ? 'Cannot connect to server' : 'Login failed');
       setError(errorMessage);
       return {
         success: false,
