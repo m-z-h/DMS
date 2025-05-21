@@ -20,6 +20,7 @@ const fileFilter = (req, file, cb) => {
   if (
     file.mimetype === 'application/pdf' ||
     file.mimetype === 'image/jpeg' ||
+    file.mimetype === 'image/jpg' ||
     file.mimetype === 'image/png'
   ) {
     cb(null, true);
@@ -38,7 +39,7 @@ const upload = multer({
 });
 
 // Medical document routes for patients
-router.post('/upload', protect, authorize('Patient'), upload.single('file'), uploadFile);
+router.post('/upload', protect, authorize(['Patient', 'Doctor']), upload.single('file'), uploadFile);
 router.get('/my-documents', protect, authorize('Patient'), getPatientFiles);
 router.get('/document/:documentId', protect, getFileById);
 router.put('/document/:documentId', protect, authorize('Patient'), updateDocument);

@@ -20,16 +20,23 @@ const PatientDashboard = () => {
     if (filename.startsWith('http')) return filename;
     
     // Get API base URL from environment or default
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const baseUrl = import.meta.env.VITE_API_URL 
+      ? import.meta.env.VITE_API_URL.replace('/api', '') 
+      : 'http://localhost:5000';
     
-    // For documents or images stored in the database
-    if (filename.match(/^[0-9a-fA-F]{24}$/)) {
-      // This looks like a MongoDB ObjectId - use the document endpoint
-      return `${baseUrl}/files/document/${filename}`;
+    // For profile photos or other images with filenames
+    if (filename.includes('.') || filename.includes('-')) {
+      return `${baseUrl}/uploads/${filename}`;
     }
     
-    // For profile photos or other images, use the document endpoint
-    return `${baseUrl}/files/document/${filename}`;
+    // For documents or images stored in the database by ID
+    if (filename.match(/^[0-9a-fA-F]{24}$/)) {
+      // This looks like a MongoDB ObjectId - use the document endpoint
+      return `${baseUrl}/api/files/document/${filename}`;
+    }
+    
+    // Default: use document endpoint
+    return `${baseUrl}/api/files/document/${filename}`;
   };
   
   const [activeTab, setActiveTab] = useState('overview');
@@ -288,6 +295,7 @@ const PatientDashboard = () => {
             // Fix the property path - response contains document, not file
             const filename = uploadRes.data.document.filename;
             profilePhotoUrl = filename;
+            console.log('Uploaded profile photo:', filename);
           } else {
             throw new Error('File upload failed');
           }

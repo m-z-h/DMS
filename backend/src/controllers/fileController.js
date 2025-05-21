@@ -15,21 +15,13 @@ exports.uploadFile = async (req, res) => {
         message: 'No file uploaded'
       });
     }
-
-    // Find patient ID from logged in user
-    const patient = await Patient.findOne({ userId: req.user.id });
-    
-    if (!patient) {
-      return res.status(404).json({
-        success: false,
-        message: 'Patient profile not found'
-      });
-    }
     
     console.log('Processing file upload:', {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
-      size: req.file.size
+      size: req.file.size,
+      user: req.user.username,
+      role: req.user.role
     });
 
     // Read file data from buffer
@@ -41,14 +33,56 @@ exports.uploadFile = async (req, res) => {
         message: 'File data not available'
       });
     }
+    
+    // Generate a unique filename to prevent collisions
+    const timestamp = Date.now();
+    const uniqueFilename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '_')}`;
+    
+    // Save file to disk for images (for profile photos)
+    if (req.file.mimetype.startsWith('image/')) {
+      const filePath = path.join(__dirname, '../../uploads', uniqueFilename);
+      
+      try {
+        fs.writeFileSync(filePath, fileData);
+        console.log('File saved to disk:', filePath);
+      } catch (diskError) {
+        console.error('Error saving file to disk:', diskError);
+        // Continue even if disk save fails - we'll store in DB anyway
+      }
+    }
 
-    // Create document metadata in database with file content
-    const documentType = req.body.documentType || 'Other';
+    // Create document metadata in database 
+    let patientId = null;
+    const isProfilePhoto = req.body.isProfilePhoto === 'true' || req.query.isProfilePhoto === 'true';
+    let documentType = req.body.documentType || 'Other';
+    
+    // If it's a profile photo, mark it as such
+    if (isProfilePhoto || req.file.mimetype.startsWith('image/')) {
+      documentType = 'Profile Photo';
+    }
+    
+    // If user is a Patient, find their patient ID
+    if (req.user.role === 'Patient') {
+      const patient = await Patient.findOne({ userId: req.user.id });
+      
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient profile not found'
+        });
+      }
+      
+      patientId = patient._id;
+    }
+    
     const description = req.body.description || '';
     
+    // Create medical document with the user's ID - this works for both patient and doctor uploads
     const medicalDocument = await MedicalDocument.create({
-      patientId: patient._id,
-      filename: req.file.originalname,
+      patientId,  // May be null for doctor uploads
+      uploaderId: req.user.id,
+      isProfilePhoto: isProfilePhoto || req.file.mimetype.startsWith('image/'),
+      filename: uniqueFilename,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
       size: req.file.size,
@@ -63,14 +97,14 @@ exports.uploadFile = async (req, res) => {
     
     res.status(200).json({
       success: true,
-      message: 'Medical document uploaded successfully',
+      message: 'File uploaded successfully',
       document: responseDocument
     });
   } catch (error) {
     console.error('File upload error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error uploading medical document',
+      message: 'Error uploading file',
       error: error.message
     });
   }

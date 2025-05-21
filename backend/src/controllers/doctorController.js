@@ -72,7 +72,16 @@ exports.updateProfile = async (req, res) => {
     
     // Handle profile photo update
     if (profilePhoto !== undefined) {
-      doctor.profilePhoto = profilePhoto;
+      if (profilePhoto && profilePhoto.startsWith('data:')) {
+        // This is a data URL, store as is
+        doctor.profilePhoto = profilePhoto;
+      } else if (profilePhoto) {
+        // This is a filename, store the exact filename
+        doctor.profilePhoto = profilePhoto;
+        console.log('Updated doctor profile photo to:', profilePhoto);
+      } else {
+        doctor.profilePhoto = null;
+      }
     }
     
     await doctor.save();

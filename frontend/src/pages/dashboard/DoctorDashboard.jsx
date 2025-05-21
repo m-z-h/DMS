@@ -458,7 +458,10 @@ const DoctorDashboard = () => {
         try {
           const formData = new FormData();
           formData.append('file', profilePhotoFile);
+          formData.append('isProfilePhoto', 'true');
+          formData.append('documentType', 'Profile Photo');
           
+          console.log('Uploading profile photo...');
           const uploadRes = await axios.post(
             `${apiUrl}/files/upload`,
             formData,
@@ -470,8 +473,11 @@ const DoctorDashboard = () => {
             }
           );
           
+          console.log('Upload response:', uploadRes.data);
+          
           if (uploadRes.data.success) {
-            profilePhotoUrl = uploadRes.data.file.filename;
+            profilePhotoUrl = uploadRes.data.document.filename;
+            console.log('Profile photo uploaded successfully:', profilePhotoUrl);
           } else {
             throw new Error('File upload failed');
           }
@@ -551,11 +557,21 @@ const DoctorDashboard = () => {
     // Get API base URL from environment or default
     const baseUrl = import.meta.env.VITE_API_URL 
       ? import.meta.env.VITE_API_URL.replace('/api', '') // Remove /api if present
-      : window.location.origin; // Use origin as fallback
+      : 'http://localhost:5000'; // Use origin as fallback
+    
+    // For profile photos or other images with filenames
+    if (filename.includes('.') || filename.includes('-')) {
+      return `${baseUrl}/uploads/${filename}`;
+    }
     
     // If it includes the full path like /uploads/filename, add domain
     if (filename.startsWith('/uploads/')) {
       return `${baseUrl}${filename}`;
+    }
+    
+    // For documents by ID
+    if (filename.match(/^[0-9a-fA-F]{24}$/)) {
+      return `${baseUrl}/api/files/document/${filename}`;
     }
     
     // Otherwise assume it's just a filename that needs the full path

@@ -253,10 +253,10 @@ exports.updatePersonalInfo = async (req, res) => {
         console.log('Received data URL for profile photo');
         patient.profilePhoto = profilePhoto;
       } else if (profilePhoto) {
-        // This is a filename, store just the filename
-        patient.profilePhoto = profilePhoto.includes('/') 
-          ? profilePhoto.split('/').pop() 
-          : profilePhoto;
+        // This is a filename, store the exact filename
+        // Don't modify the filename - use it as is since it was saved by fileController
+        patient.profilePhoto = profilePhoto;
+        console.log('Updated profile photo to:', profilePhoto);
       } else {
         patient.profilePhoto = null;
       }
