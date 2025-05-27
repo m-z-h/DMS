@@ -2,12 +2,12 @@
 const config = {
   // Backend API base URL
   API_URL: import.meta.env.PROD
-    ? 'https://dms-backend-bay.vercel.app/api' 
+    ? 'https://dms-o3zx.vercel.app/api' 
     : 'http://localhost:5000/api',
   
   // File uploads URL
   UPLOADS_URL: import.meta.env.PROD
-    ? 'https://dms-backend-bay.vercel.app/uploads'
+    ? 'https://dms-o3zx.vercel.app/uploads'
     : 'http://localhost:5000/uploads'
 };
 
