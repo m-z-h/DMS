@@ -30,8 +30,8 @@ const Register = () => {
   const { register } = useAuth();
   const navigate = useNavigate();
   
-  // API base URL from environment variable or default
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  // Hardcoded API URL for production
+  const apiUrl = 'https://dms-o3zx.vercel.app/api';
   
   // Check if admin exists and fetch hospitals and departments
   useEffect(() => {

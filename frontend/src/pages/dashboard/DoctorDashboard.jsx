@@ -66,8 +66,10 @@ const DoctorDashboard = () => {
   
   const [crossHospitalRecords, setCrossHospitalRecords] = useState([]);
   
-  // API base URL from environment variable or default
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [sortDirection, setSortDirection] = useState('desc');
+  
+  const apiUrl = 'https://dms-o3zx.vercel.app/api';
   
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -555,9 +557,7 @@ const DoctorDashboard = () => {
     if (filename.startsWith('http')) return filename;
     
     // Get API base URL from environment or default
-    const baseUrl = import.meta.env.VITE_API_URL 
-      ? import.meta.env.VITE_API_URL.replace('/api', '') // Remove /api if present
-      : 'http://localhost:5000'; // Use origin as fallback
+    const baseUrl = 'https://dms-o3zx.vercel.app'; // Remove /api if present
     
     // For profile photos or other images with filenames
     if (filename.includes('.') || filename.includes('-')) {

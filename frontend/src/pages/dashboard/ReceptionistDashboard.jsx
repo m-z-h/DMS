@@ -17,7 +17,7 @@ const ReceptionistDashboard = () => {
   const [newPatientId, setNewPatientId] = useState(null);
 
   // API base URL from environment variable or default
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  const apiUrl = 'https://dms-o3zx.vercel.app/api';
 
   // Patient registration form
   const [patientForm, setPatientForm] = useState({

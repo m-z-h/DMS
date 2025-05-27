@@ -17,8 +17,8 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // API base URL from environment variable or default
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  // API base URL hardcoded to deployed backend
+  const apiUrl = 'https://dms-o3zx.vercel.app/api';
 
   // Configure axios with credentials
   axios.defaults.withCredentials = true;

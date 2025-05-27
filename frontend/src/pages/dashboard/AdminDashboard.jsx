@@ -56,19 +56,20 @@ const AdminDashboard = () => {
     }
   });
   
-  // Configure axios with base URL and token
-  const apiClient = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  // Create an axios instance for admin API calls with the token
+  const adminAxios = axios.create({
+    baseURL: 'https://dms-o3zx.vercel.app/api',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    }
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
+    },
+    withCredentials: true
   });
 
   // Recreate apiClient when token changes
   useEffect(() => {
     if (token) {
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      adminAxios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     }
   }, [token]);
 
@@ -97,7 +98,7 @@ const AdminDashboard = () => {
   const fetchAnalytics = async () => {
     setLoading(prev => ({ ...prev, analytics: true }));
     try {
-      const res = await apiClient.get('/admin/analytics');
+      const res = await adminAxios.get('/admin/analytics');
       setAnalytics(res.data.data);
     } catch (error) {
       console.error('Error fetching analytics:', error);
@@ -117,7 +118,7 @@ const AdminDashboard = () => {
       if (role) url += `&role=${role}`;
       if (active !== '') url += `&active=${active}`;
       
-      const res = await apiClient.get(url);
+      const res = await adminAxios.get(url);
       
       setUsers(res.data.data);
       setPagination(prev => ({
@@ -147,7 +148,7 @@ const AdminDashboard = () => {
       if (startDate) url += `&startDate=${startDate}`;
       if (endDate) url += `&endDate=${endDate}`;
       
-      const res = await apiClient.get(url);
+      const res = await adminAxios.get(url);
       
       setAuditLogs(res.data.data);
       setPagination(prev => ({
@@ -167,7 +168,7 @@ const AdminDashboard = () => {
   // Toggle user active status
   const toggleUserStatus = async (userId, currentStatus) => {
     try {
-      await apiClient.patch(`/admin/users/${userId}/status`);
+      await adminAxios.patch(`/admin/users/${userId}/status`);
       
       // Update user in the list without refetching
       setUsers(users.map(user => 
@@ -187,7 +188,7 @@ const AdminDashboard = () => {
     }
     
     try {
-      await apiClient.delete(`/admin/users/${userId}`);
+      await adminAxios.delete(`/admin/users/${userId}`);
       
       // Remove user from the list
       setUsers(users.filter(user => user._id !== userId));

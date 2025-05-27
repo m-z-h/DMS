@@ -19,10 +19,8 @@ const PatientDashboard = () => {
     // If it's already a full URL, keep as is
     if (filename.startsWith('http')) return filename;
     
-    // Get API base URL from environment or default
-    const baseUrl = import.meta.env.VITE_API_URL 
-      ? import.meta.env.VITE_API_URL.replace('/api', '') 
-      : 'http://localhost:5000';
+    // Hardcoded API base URL
+    const baseUrl = 'https://dms-o3zx.vercel.app';
     
     // For profile photos or other images with filenames
     if (filename.includes('.') || filename.includes('-')) {
@@ -87,8 +85,8 @@ const PatientDashboard = () => {
   });
   const [fileUploadLoading, setFileUploadLoading] = useState(false);
   
-  // API base URL from environment variable or default
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  // Hardcoded API URL for production
+  const apiUrl = 'https://dms-o3zx.vercel.app/api';
   
   useEffect(() => {
     fetchAllData();
