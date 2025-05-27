@@ -15,18 +15,40 @@ const generateAccessCode = () => {
   return crypto.randomBytes(4).toString('hex');
 };
 
-// Helper function to generate JWT token
+// Helper function to generate JWT token with better error handling
 const generateToken = (userId, role, hospitalCode, departmentCode) => {
-  return jwt.sign(
-    { 
-      id: userId,
-      role: role,
+  try {
+    // Ensure we have a JWT secret
+    const secret = process.env.JWT_SECRET || 'healthcareDMSSecretKey2024';
+    
+    // Sanitize inputs to prevent token generation errors
+    const payload = {
+      id: userId ? userId.toString() : '',
+      role: role || 'Guest',
       hospitalCode: hospitalCode || '',
       departmentCode: departmentCode || ''
-    },
-    process.env.JWT_SECRET || 'your_jwt_secret',
-    { expiresIn: process.env.JWT_EXPIRE || '24h' }
-  );
+    };
+    
+    // Use a reasonable expiration time
+    const expiry = process.env.JWT_EXPIRE || '30d';
+    
+    return jwt.sign(
+      payload,
+      secret,
+      { expiresIn: expiry }
+    );
+  } catch (err) {
+    console.error('Error generating token:', err);
+    // Use a fallback approach instead of throwing
+    const fallbackSecret = 'healthcareDMSSecretKey2024';
+    const fallbackPayload = { id: userId ? userId.toString() : '', role: role || 'Guest' };
+    
+    return jwt.sign(
+      fallbackPayload,
+      fallbackSecret,
+      { expiresIn: '1d' }
+    );
+  }
 };
 
 // Check if admin exists
@@ -187,19 +209,35 @@ exports.register = async (req, res) => {
  */
 exports.login = async (req, res) => {
   try {
+    console.log('[DEBUG] Login function called');
     const { email, password } = req.body;
 
     // Validate input
     if (!email || !password) {
+      console.log('[DEBUG] Missing email or password');
       return res.status(400).json({
         success: false,
         message: 'Please provide email and password'
       });
     }
 
-    // Find user
-    const user = await User.findOne({ email });
+    console.log(`[DEBUG] Looking up user with email: ${email}`);
+    
+    // Find user - add error handling for DB connection issues
+    let user;
+    try {
+      user = await User.findOne({ email });
+    } catch (dbError) {
+      console.error('[DEBUG] Database error when finding user:', dbError);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error when finding user',
+        error: process.env.NODE_ENV === 'production' ? 'Database error' : dbError.message
+      });
+    }
+    
     if (!user) {
+      console.log('[DEBUG] User not found');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -208,80 +246,120 @@ exports.login = async (req, res) => {
 
     // Check if account is active
     if (!user.active) {
+      console.log('[DEBUG] User account is not active');
       return res.status(403).json({
         success: false,
         message: 'Account is pending approval or has been deactivated'
       });
     }
 
-    // Verify password
-    const isMatch = await user.comparePassword(password);
+    console.log('[DEBUG] Verifying password');
+    
+    // Verify password - with better error handling
+    let isMatch = false;
+    try {
+      isMatch = await user.comparePassword(password);
+    } catch (passwordError) {
+      console.error('[DEBUG] Password comparison error:', passwordError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error during password verification',
+        error: process.env.NODE_ENV === 'production' ? 'Authentication error' : passwordError.message
+      });
+    }
+    
     if (!isMatch) {
+      console.log('[DEBUG] Password does not match');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
 
+    console.log('[DEBUG] Password verified, getting profile data');
+    
     // Get user profile information based on role
     let profileData = {};
     
-    if (user.role === 'Doctor') {
-      const doctor = await Doctor.findOne({ userId: user._id });
-      if (!doctor) {
-        return res.status(404).json({
-          success: false,
-          message: 'Doctor profile not found'
-        });
+    try {
+      if (user.role === 'Doctor') {
+        const doctor = await Doctor.findOne({ userId: user._id });
+        if (!doctor) {
+          console.log('[DEBUG] Doctor profile not found');
+          return res.status(404).json({
+            success: false,
+            message: 'Doctor profile not found'
+          });
+        }
+        
+        profileData = {
+          fullName: doctor.fullName,
+          hospitalCode: doctor.hospitalCode,
+          departmentCode: doctor.departmentCode,
+          contactNo: doctor.contactNo,
+          licenseNo: doctor.licenseNo,
+          specialization: doctor.specialization
+        };
+      } else if (user.role === 'Receptionist') {
+        const receptionist = await Receptionist.findOne({ userId: user._id });
+        if (!receptionist) {
+          console.log('[DEBUG] Receptionist profile not found');
+          return res.status(404).json({
+            success: false,
+            message: 'Receptionist profile not found'
+          });
+        }
+        
+        profileData = {
+          fullName: receptionist.fullName,
+          hospitalCode: receptionist.hospitalCode,
+          contactNo: receptionist.contactNo,
+          employeeId: receptionist.employeeId
+        };
+      } else if (user.role === 'Patient') {
+        const patient = await Patient.findOne({ userId: user._id });
+        if (!patient) {
+          console.log('[DEBUG] Patient profile not found');
+          return res.status(404).json({
+            success: false,
+            message: 'Patient profile not found'
+          });
+        }
+        
+        profileData = {
+          fullName: patient.fullName,
+          accessCode: patient.accessCode,
+          contactNo: patient.contactNo
+        };
       }
-      
-      profileData = {
-        fullName: doctor.fullName,
-        hospitalCode: doctor.hospitalCode,
-        departmentCode: doctor.departmentCode,
-        contactNo: doctor.contactNo,
-        licenseNo: doctor.licenseNo,
-        specialization: doctor.specialization
-      };
-    } else if (user.role === 'Receptionist') {
-      const receptionist = await Receptionist.findOne({ userId: user._id });
-      if (!receptionist) {
-        return res.status(404).json({
-          success: false,
-          message: 'Receptionist profile not found'
-        });
-      }
-      
-      profileData = {
-        fullName: receptionist.fullName,
-        hospitalCode: receptionist.hospitalCode,
-        contactNo: receptionist.contactNo,
-        employeeId: receptionist.employeeId
-      };
-    } else if (user.role === 'Patient') {
-      const patient = await Patient.findOne({ userId: user._id });
-      if (!patient) {
-        return res.status(404).json({
-          success: false,
-          message: 'Patient profile not found'
-        });
-      }
-      
-      profileData = {
-        fullName: patient.fullName,
-        accessCode: patient.accessCode,
-        contactNo: patient.contactNo
-      };
+    } catch (profileError) {
+      console.error('[DEBUG] Error getting profile data:', profileError);
+      // Continue without profile data rather than failing the login
+      profileData = { error: 'Could not retrieve complete profile data' };
     }
 
+    console.log('[DEBUG] Generating token');
+    
     // Generate JWT token with role and other important information
-    const token = generateToken(
-      user._id, 
-      user.role, 
-      user.hospitalCode || profileData.hospitalCode, 
-      user.departmentCode || profileData.departmentCode
-    );
+    let token;
+    try {
+      token = generateToken(
+        user._id, 
+        user.role, 
+        user.hospitalCode || profileData.hospitalCode, 
+        user.departmentCode || profileData.departmentCode
+      );
+    } catch (tokenError) {
+      console.error('[DEBUG] Token generation error:', tokenError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error generating authentication token',
+        error: process.env.NODE_ENV === 'production' ? 'Authentication error' : tokenError.message
+      });
+    }
 
+    console.log('[DEBUG] Login successful, returning response');
+    
     return res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -295,11 +373,11 @@ exports.login = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('[DEBUG] Unhandled login error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error during login',
-      error: error.message
+      error: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message
     });
   }
 };

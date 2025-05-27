@@ -43,7 +43,7 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Hash password before saving
+// Hash password before saving - with try/catch and better error handling
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   
@@ -52,13 +52,24 @@ userSchema.pre('save', async function(next) {
     this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
+    console.error('Error hashing password:', error);
     next(error);
   }
 });
 
-// Method to compare password
+// Method to compare password - with try/catch and better error handling
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  try {
+    // Make sure passwords exist
+    if (!candidatePassword || !this.password) {
+      console.error('Missing password for comparison');
+      return false;
+    }
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    console.error('Error comparing password:', error);
+    return false; // Return false instead of throwing an error
+  }
 };
 
 const User = mongoose.model('User', userSchema);
