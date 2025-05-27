@@ -26,6 +26,19 @@ const receptionistRoutes = require('../src/routes/receptionistRoutes');
 // Middleware
 const { logActivity } = require('../src/middleware/audit');
 
+// Add global error handlers for uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  console.error('Stack:', err.stack);
+  // Keep the process running despite uncaught exceptions in Vercel environment
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION:', err);
+  console.error('Stack:', err.stack);
+  // Keep the process running despite unhandled rejections in Vercel environment
+});
+
 // Initialize app
 const app = express();
 
@@ -85,7 +98,16 @@ app.get('/api/uploads/list', (req, res) => {
 });
 
 // Mount routers - Auth routes should be mounted before the audit middleware
-app.use('/api/auth', authRoutes);
+// Add debug logging middleware before the auth routes
+app.use('/api/auth', (req, res, next) => {
+  console.log(`[DEBUG] Auth route hit: ${req.method} ${req.url}`);
+  
+  // For login route, add specific debugging
+  if (req.method === 'POST' && req.url === '/login') {
+    console.log('[DEBUG] Login attempt:', req.body.email);
+  }
+  next();
+}, authRoutes);
 
 // Apply audit logging to routes after auth routes
 app.use(logActivity);
@@ -134,15 +156,21 @@ const connectDB = async () => {
     // Try connecting with provided URI or local connection
     const mongoUri = process.env.MONGO_URI || 'mongodb+srv://mzh:mzh2580@cluster0.nl0a7aj.mongodb.net/DMS?retryWrites=true&w=majority&appName=Cluster0';
     
+    console.log(`Connecting to MongoDB at ${mongoUri.substring(0, mongoUri.indexOf('@') > 0 ? mongoUri.indexOf('@') : 15)}...`);
+    
     await mongoose.connect(mongoUri, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000 // Timeout after 5s instead of 30s
+      serverSelectionTimeoutMS: 10000, // Increased timeout to 10s
+      heartbeatFrequencyMS: 30000,     // Increase heartbeat frequency
+      socketTimeoutMS: 45000,          // Increase socket timeout
+      family: 4                        // Use IPv4, skip trying IPv6
     });
     
     console.log(`MongoDB connected: ${mongoose.connection.host}`);
   } catch (err) {
     console.error('MongoDB connection error:', err.message);
+    console.error('Error details:', err);
     console.log('Continuing without database - some features will be limited');
   }
 };
