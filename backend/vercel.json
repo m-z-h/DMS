@@ -20,6 +20,7 @@
   }
  ],
  "env": {
-  "NODE_ENV": "vercel"
+  "NODE_ENV": "vercel",
+  "CLIENT_URL": "https://dms-hqos.vercel.app"
  }
 }
